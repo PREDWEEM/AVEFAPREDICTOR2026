@@ -87,7 +87,7 @@ ann = load_ann()
 # ===============================================================
 # CLASIFICADOR METEO → PATRÓN
 # ===============================================================
-MODEL_PATH = "predweem_meteo2patron.pkl"
+MODEL_PATH = "predweem_meteo2patron_v2025_sklearn113.pkl"
 
 def extraer_features(df):
     df2 = df.copy()
