@@ -18,7 +18,7 @@ st.sidebar.write("🔬 sklearn versión:", sklearn.__version__)
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import joblib
+
 
 # ---------------------------------------------------------------
 # VISUAL CONFIG STREAMLIT
@@ -87,7 +87,7 @@ ann = load_ann()
 # ===============================================================
 # CLASIFICADOR METEO → PATRÓN
 # ===============================================================
-MODEL_PATH = "predweem_meteo2patron_v2025_sklearn113.pkl"
+
 
 def extraer_features(df):
     df2 = df.copy()
@@ -103,9 +103,6 @@ def extraer_features(df):
         "Prec_FM": df2[df2["JD"] <= 121]["Prec"].sum()
     }
 
-@st.cache_resource
-def load_clf():
-    return joblib.load(MODEL_PATH)
 
 def predecir_patron(df):
     X = pd.DataFrame([extraer_features(df)])
