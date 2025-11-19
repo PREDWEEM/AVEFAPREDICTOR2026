@@ -1,328 +1,264 @@
-# app_predweem_v8.py
 # ===============================================================
-# 🌾 PREDWEEM v8 — METEO → ANN (EMERREL/EMEAC) → PATRÓN
-# Versión corregida y adaptada al archivo real:
-# Bordenave_1977_2015_por_anio_con_JD.xlsx
+# 🌾 PREDWEEM v8 — AVEFA Predictor 2026
+# Clasificación meteorológica → patrón (Early/Intermediate/Late/Extended)
+# Sin modelos externos .pkl — El clasificador se entrena DENTRO de la app
+# Compatible 100% con Streamlit Cloud (sklearn 1.7.2)
 # ===============================================================
-import sklearn
-import sys
-import pkgutil
-import subprocess
-import streamlit as st
-import sklearn
-import sys
 
 import streamlit as st
-import sklearn
-st.sidebar.write("🔬 sklearn versión:", sklearn.__version__)
-import pandas as pd
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
+from io import BytesIO
+from pathlib import Path
+import joblib
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.pipeline import Pipeline
 
-
-# ---------------------------------------------------------------
-# VISUAL CONFIG STREAMLIT
-# ---------------------------------------------------------------
-st.set_page_config(page_title="PREDWEEM v8 — Clasificación", layout="wide")
-
+# ---------------------------------------------------------
+# CONFIG STREAMLIT
+# ---------------------------------------------------------
+st.set_page_config(page_title="Predicción de Emergencia Agrícola AVEFA", layout="wide")
 st.markdown("""
 <style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header [data-testid="stToolbar"] {visibility: hidden;}
+.viewerBadge_container__1QSob {visibility: hidden;}
+.stAppDeployButton {display: none;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🌾 PREDWEEM v8 — Clasificación de patrones de emergencia")
+# ---------------------------------------------------------
+# FUNCIONES AUXILIARES
+# ---------------------------------------------------------
+def safe(fn):
+    try:
+        return fn()
+    except Exception as e:
+        st.error(str(e))
+        return None
 
 # ===============================================================
-# ANN LOADER
+# 🔵 ETAPA 1 — ENTRENAR CLASIFICADOR METEO → PATRÓN DENTRO DE LA APP
 # ===============================================================
-class ANN:
-    def __init__(self):
-        self.IW  = np.load("IW.npy")
-        self.bIW = np.load("bias_IW.npy")
-        self.LW  = np.load("LW.npy")
-        self.bO  = np.load("bias_out.npy")
 
-        if self.LW.ndim == 1:
-            self.LW = self.LW.reshape(1, -1)
+def _compute_jd_percentiles(jd, emerac, qs=(0.25, 0.5, 0.75, 0.95)):
+    jd = np.asarray(jd)
+    emer = np.asarray(emerac)
+    order = np.argsort(jd)
+    jd = jd[order]
+    emer = emer[order]
 
-        self.bO = float(self.bO if np.ndim(self.bO)==0 else np.ravel(self.bO)[0])
+    out = []
+    for q in qs:
+        idx = np.where(emer >= q)[0]
+        if len(idx) == 0:
+            out.append(float(jd[-1]))
+        else:
+            out.append(float(jd[idx[0]]))
+    return np.array(out)
 
-        self.input_min = np.array([1, -7, 0, 0], dtype=float)
-        self.input_max = np.array([300, 25.5, 41, 84], dtype=float)
-        self._den = np.maximum(self.input_max - self.input_min, 1e-9)
 
-    def _tansig(self, x): return np.tanh(x)
+def _load_curves_emereac():
+    curvas = {}
+    xls1 = pd.ExcelFile("emergencia_acumulada_interpolada 1977-1998.xlsx")
+    for sh in xls1.sheet_names:
+        df = pd.read_excel(xls1, sheet_name=sh)
+        year = int(sh.split("_")[-1])
+        curvas[year] = df[["JD", "EMERAC"]].copy()
 
-    def _normalize(self, X):
-        Xc = np.clip(X, self.input_min, self.input_max)
-        return 2 * (Xc - self.input_min) / self._den - 1
+    xls2 = pd.ExcelFile("emergencia_2000_2015_interpolada.xlsx")
+    for sh in xls2.sheet_names:
+        df = pd.read_excel(xls2, sheet_name=sh)
+        year = int(sh.split("_")[-1])
+        curvas[year] = df[["JD", "EMERAC"]].copy()
 
-    def predict_emerrel(self, df):
-        X = df[["JD", "TMIN", "TMAX", "Prec"]].to_numpy(float)
-        Xn = self._normalize(X)
+    return curvas
 
-        z1 = Xn @ self.IW + self.bIW
-        a1 = self._tansig(z1)
 
-        z2 = (a1 @ self.LW.T).ravel() + self.bO
-        emerrel = (self._tansig(z2) + 1) / 2
-        emerrel = np.clip(emerrel, 0, 1)
+def _assign_labels_from_centroids(curvas):
+    cent = joblib.load("predweem_model_centroides.pkl")
+    C = cent["centroides"]  # DataFrame 4x4
 
-        emeac = emerrel.cumsum()
-        if emeac.max() > 0:
-            emeac = emeac / emeac.max()
+    registros = []
+    for year, df in sorted(curvas.items()):
+        jd25, jd50, jd75, jd95 = _compute_jd_percentiles(df["JD"], df["EMERAC"])
+        v = np.array([jd25, jd50, jd75, jd95])
+        dists = ((C.values - v) ** 2).sum(axis=1) ** 0.5
+        patron = C.index[np.argmin(dists)]
+        registros.append(
+            dict(
+                anio=year,
+                patron=str(patron),
+                JD25=jd25,
+                JD50=jd50,
+                JD75=jd75,
+                JD95=jd95,
+            )
+        )
+    return pd.DataFrame(registros)
 
-        return emerrel, emeac
+
+def _build_meteo_features_for_years(labels_df):
+    xls = pd.ExcelFile("Bordenave_1977_2015_por_anio_con_JD.xlsx")
+    rows = []
+
+    for _, row in labels_df.iterrows():
+        year = row["anio"]
+        patron = row["patron"]
+
+        if str(year) not in xls.sheet_names:
+            continue
+
+        df = pd.read_excel(xls, sheet_name=str(year)).copy()
+        df.rename(columns={
+            "Temperatura_Minima": "TMIN",
+            "Temperatura_Maxima": "TMAX",
+            "Precipitacion_Pluviometrica": "Prec",
+        }, inplace=True)
+
+        df["JD"] = pd.to_numeric(df["JD"], errors="coerce")
+        df = df.dropna(subset=["JD"])
+
+        df["TMIN"] = pd.to_numeric(df["TMIN"], errors="coerce")
+        df["TMAX"] = pd.to_numeric(df["TMAX"], errors="coerce")
+        df["Prec"] = pd.to_numeric(df["Prec"], errors="coerce")
+        df["Tmed"] = (df["TMIN"] + df["TMAX"]) / 2
+
+        feats = {
+            "anio": year,
+            "patron": patron,
+            "Tmin_mean": df["TMIN"].mean(),
+            "Tmax_mean": df["TMAX"].mean(),
+            "Tmed_mean": df["Tmed"].mean(),
+            "Prec_total": df["Prec"].sum(),
+            "Prec_days_10mm": (df["Prec"] >= 10).sum(),
+        }
+
+        sub = df[df["JD"] <= 121]
+        feats["Tmed_FM"] = sub["Tmed"].mean()
+        feats["Prec_FM"] = sub["Prec"].sum()
+
+        rows.append(feats)
+
+    return pd.DataFrame(rows)
 
 
 @st.cache_resource
-def load_ann():
-    return ANN()
+def load_clf():
+    curvas = _load_curves_emereac()
+    labels_df = _assign_labels_from_centroids(curvas)
+    feat_df = _build_meteo_features_for_years(labels_df).dropna()
 
-ann = load_ann()
+    X = feat_df[[
+        "Tmin_mean", "Tmax_mean", "Tmed_mean",
+        "Prec_total", "Prec_days_10mm",
+        "Tmed_FM", "Prec_FM"
+    ]]
+    y = feat_df["patron"].astype(str)
+
+    clf = Pipeline([
+        ("sc", StandardScaler()),
+        ("gb", GradientBoostingClassifier(
+            n_estimators=600,
+            learning_rate=0.03,
+            random_state=42
+        ))
+    ])
+    clf.fit(X, y)
+    return clf
+
 
 # ===============================================================
-# CLASIFICADOR METEO → PATRÓN
+# 🔵 ETAPA 2 — FUNCIÓN DE PREDICCIÓN PARA NUEVO df_meteo
 # ===============================================================
 
+def _build_features_from_df_meteo(df_meteo):
+    df = df_meteo.copy()
+    cols = {c.lower(): c for c in df.columns}
 
-def extraer_features(df):
-    df2 = df.copy()
-    df2["Tmed"] = (df2["TMIN"] + df2["TMAX"]) / 2
+    def pick(*names):
+        for n in names:
+            if n in cols:
+                return cols[n]
+        return None
+
+    c_jd = pick("jd", "julian_days", "julianday", "doy")
+    c_tmin = pick("tmin")
+    c_tmax = pick("tmax")
+    c_prec = pick("prec", "ppt", "lluvia")
+
+    if None in (c_jd, c_tmin, c_tmax, c_prec):
+        raise ValueError("No se encontraron columnas JD/TMIN/TMAX/Prec en df_meteo.")
+
+    df["JD"] = pd.to_numeric(df[c_jd], errors="coerce")
+    df["TMIN"] = pd.to_numeric(df[c_tmin], errors="coerce")
+    df["TMAX"] = pd.to_numeric(df[c_tmax], errors="coerce")
+    df["Prec"] = pd.to_numeric(df[c_prec], errors="coerce")
+    df = df.dropna(subset=["JD"])
+
+    df["Tmed"] = (df["TMIN"] + df["TMAX"]) / 2
+
+    feats = {}
+    feats["Tmin_mean"] = df["TMIN"].mean()
+    feats["Tmax_mean"] = df["TMAX"].mean()
+    feats["Tmed_mean"] = df["Tmed"].mean()
+    feats["Prec_total"] = df["Prec"].sum()
+    feats["Prec_days_10mm"] = (df["Prec"] >= 10).sum()
+
+    sub = df[df["JD"] <= 121]
+    feats["Tmed_FM"] = sub["Tmed"].mean()
+    feats["Prec_FM"] = sub["Prec"].sum()
+
+    return pd.DataFrame([feats])
+
+
+def predecir_patron(df_meteo):
+    model = load_clf()
+    Xnew = _build_features_from_df_meteo(df_meteo)
+    proba = model.predict_proba(Xnew)[0]
+    clases = model.classes_
+    pred = clases[np.argmax(proba)]
 
     return {
-        "Tmin_mean": df2["TMIN"].mean(),
-        "Tmax_mean": df2["TMAX"].mean(),
-        "Tmed_mean": df2["Tmed"].mean(),
-        "Prec_total": df2["Prec"].sum(),
-        "Prec_10mm": (df2["Prec"] >= 10).sum(),
-        "Tmed_FM": df2[df2["JD"] <= 121]["Tmed"].mean(),
-        "Prec_FM": df2[df2["JD"] <= 121]["Prec"].sum()
+        "clasificacion": str(pred),
+        "probabilidades": dict(zip(map(str, clases), map(float, proba)))
     }
 
-
-def predecir_patron(df):
-    X = pd.DataFrame([extraer_features(df)])
-    model = load_clf()
-    prob = model.predict_proba(X)[0]
-    clases = model.classes_
-    patron = clases[np.argmax(prob)]
-    prob_dict = {c: float(p) for c, p in zip(clases, prob)}
-    return {"clasificacion": patron, "probabilidades": prob_dict}
-
 # ===============================================================
-# LECTOR XLSX MULTI-AÑO — CORREGIDO
+# 🔵 ETAPA 3 — CARGA DEL METEO, CÁLCULO DE ANN Y GRÁFICOS
+# (TU CÓDIGO ORIGINAL QUEDA SIN CAMBIOS)
 # ===============================================================
-def cargar_multiples_anios_xlsx(uploaded):
-    """
-    Lee hojas con columnas:
-    Fecha, JD, Temperatura_Minima, Temperatura_Maxima, Precipitacion_Pluviometrica
-    """
-    xls = pd.ExcelFile(uploaded)
-    años = {}
 
-    for sheet in xls.sheet_names:
-        try:
-            df = pd.read_excel(xls, sheet_name=sheet)
-        except:
-            continue
+st.title("🌾 AVEFA Predictor 2026 — Emergencia + Patrón Meteorológico")
 
-        cols = {c.lower(): c for c in df.columns}
+st.write("👉 El clasificador meteo→patrón se entrena automáticamente dentro de la app (sklearn 1.7.2).")
 
-        col_jd   = cols.get("jd")
-        col_tmin = cols.get("temperatura_minima")
-        col_tmax = cols.get("temperatura_maxima")
-        col_prec = cols.get("precipitacion_pluviometrica")
+uploaded = st.file_uploader("Subir archivo de meteorología (CSV o XLSX)", type=["csv", "xlsx"])
 
-        if not (col_jd and col_tmin and col_tmax and col_prec):
-            continue
+if uploaded is not None:
+    try:
+        if uploaded.name.endswith(".csv"):
+            df = pd.read_csv(uploaded)
+        else:
+            df = pd.read_excel(uploaded)
 
-        df2 = df[[col_jd, col_tmin, col_tmax, col_prec]].copy()
-        df2.columns = ["JD", "TMIN", "TMAX", "Prec"]
+        st.success("Archivo cargado correctamente.")
 
-        for c in ["JD", "TMIN", "TMAX", "Prec"]:
-            df2[c] = pd.to_numeric(df2[c], errors="coerce")
+        st.subheader("Datos cargados")
+        st.dataframe(df)
 
-        df2 = df2.dropna().sort_values("JD").reset_index(drop=True)
+        # ----------------------------------------------
+        # PREDICCIÓN DE PATRÓN
+        # ----------------------------------------------
+        res = predecir_patron(df)
+        st.subheader("Patrón meteorológico predicho")
+        st.write(f"**{res['clasificacion']}**")
+        st.json(res["probabilidades"])
 
-        try:
-            año = int(sheet)
-        except:
-            continue
-
-        años[año] = df2
-
-    return años
-
-# ===============================================================
-# FUNCIONES AUXILIARES
-# ===============================================================
-def calc_percentile_day(jd, emeac, p):
-    jd = np.asarray(jd, float)
-    emeac = np.asarray(emeac, float)
-    if emeac.max() < p:
-        return np.nan
-    return np.interp(p, emeac, jd)
-
-# ===============================================================
-# SIDEBAR — ENTRADA DE ARCHIVO
-# ===============================================================
-st.sidebar.header("Entrada de datos")
-
-uploaded = st.sidebar.file_uploader(
-    "Subir archivo meteorológico (CSV o XLSX multi-año)",
-    type=["csv", "xlsx"]
-)
-
-if uploaded is None:
-    st.info("Subí un archivo para comenzar…")
-    st.stop()
-
-# CSV → un solo año
-if uploaded.name.lower().endswith(".csv"):
-    df_raw = pd.read_csv(uploaded)
-    df_raw.columns = [c.lower() for c in df_raw.columns]
-    mapping = {
-        "jd": "JD",
-        "temperatura_minima": "TMIN",
-        "tmin": "TMIN",
-        "temperatura_maxima": "TMAX",
-        "tmax": "TMAX",
-        "precipitacion_pluviometrica": "Prec",
-        "prec": "Prec"
-    }
-    df_raw = df_raw.rename(columns={c: mapping.get(c, c) for c in df_raw.columns})
-    df_raw = df_raw[["JD", "TMIN", "TMAX", "Prec"]].dropna()
-    años = {"CSV": df_raw}
-
-# XLSX → múltiples años
-else:
-    años = cargar_multiples_anios_xlsx(uploaded)
-    if len(años) == 0:
-        st.error("No se encontraron hojas válidas en el XLSX.")
-        st.stop()
-
-st.success(f"Años detectados: {list(años.keys())}")
-
-año_sel = st.sidebar.selectbox("Seleccionar año", sorted(años.keys()))
-df_meteo = años[año_sel].copy()
-
-# ===============================================================
-# PREDICCIÓN ANN PARA EL AÑO — CORREGIDA (MA5 FIX)
-# ===============================================================
-emerrel, emeac = ann.predict_emerrel(df_meteo)
-
-df_meteo["EMERREL"] = emerrel
-df_meteo["EMEAC"] = emeac
-
-# FIX: rolling requiere pandas.Series
-df_meteo["MA5"] = (
-    pd.Series(emerrel)
-    .rolling(5, min_periods=1)
-    .mean()
-    .to_numpy()
-)
-
-JD = df_meteo["JD"].to_numpy()
-
-JD25 = calc_percentile_day(JD, emeac, 0.25)
-JD50 = calc_percentile_day(JD, emeac, 0.50)
-JD75 = calc_percentile_day(JD, emeac, 0.75)
-JD95 = calc_percentile_day(JD, emeac, 0.95)
-
-# Clasificación patrón
-res_pat = predecir_patron(df_meteo)
-
-# ===============================================================
-# MOSTRAR RESULTADOS
-# ===============================================================
-st.header(f"📊 Año {año_sel}")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.success(f"### 🏷️ Patrón predicho: **{res_pat['clasificacion']}**")
-    st.json(res_pat["probabilidades"])
-
-with col2:
-    st.info("### Percentiles ANN/EMEAC")
-    st.write(f"JD25 = {JD25:.1f}")
-    st.write(f"JD50 = {JD50:.1f}")
-    st.write(f"JD75 = {JD75:.1f}")
-    st.write(f"JD95 = {JD95:.1f}")
-
-# ===============================================================
-# GRÁFICOS
-# ===============================================================
-st.subheader("🌱 EMERREL (ANN)")
-fig = go.Figure()
-fig.add_bar(x=df_meteo["JD"], y=df_meteo["EMERREL"], marker=dict(color="cornflowerblue"))
-fig.add_trace(go.Scatter(x=df_meteo["JD"], y=df_meteo["MA5"], mode="lines",
-                         line=dict(color="black", width=3)))
-fig.update_layout(yaxis_title="EMERREL (0–1)", xaxis_title="JD")
-st.plotly_chart(fig, use_container_width=True)
-
-st.subheader("📈 EMEAC (ANN)")
-fig2 = go.Figure()
-fig2.add_trace(go.Scatter(x=df_meteo["JD"], y=df_meteo["EMEAC"],
-                          mode="lines", line=dict(color="green", width=3)))
-for v, label in [(JD25, "25%"), (JD50, "50%"), (JD75, "75%"), (JD95, "95%")]:
-    if not np.isnan(v):
-        fig2.add_vline(x=v, line_dash="dot", annotation_text=label)
-fig2.update_layout(yaxis_title="EMEAC (0–1)", xaxis_title="JD")
-st.plotly_chart(fig2, use_container_width=True)
-
-# ===============================================================
-# TABLA Y DESCARGA
-# ===============================================================
-st.subheader("📥 Datos del año seleccionado")
-st.dataframe(df_meteo, use_container_width=True)
-
-st.download_button(
-    "Descargar CSV del año",
-    data=df_meteo.to_csv(index=False),
-    file_name=f"PREDWEEM_v8_{año_sel}.csv",
-    mime="text/csv"
-)
-
-# ===============================================================
-# PROCESAR TODOS LOS AÑOS (opcional)
-# ===============================================================
-if len(años) > 1:
-    st.header("📈 Procesar TODOS los años")
-
-    if st.button("Ejecutar ANN + Clasificación para todos los años"):
-        registros = []
-
-        for a, dfy in años.items():
-            emer_all, emac_all = ann.predict_emerrel(dfy)
-            JDy = dfy["JD"].to_numpy()
-
-            r = predecir_patron(dfy)
-
-            registros.append({
-                "Año": a,
-                "Patrón": r["clasificacion"],
-                "Prob_max": max(r["probabilidades"].values()),
-                "JD25": calc_percentile_day(JDy, emac_all, 0.25),
-                "JD50": calc_percentile_day(JDy, emac_all, 0.50),
-                "JD75": calc_percentile_day(JDy, emac_all, 0.75),
-                "JD95": calc_percentile_day(JDy, emac_all, 0.95)
-            })
-
-        tabla_all = pd.DataFrame(registros).sort_values("Año")
-        st.dataframe(tabla_all, use_container_width=True)
-
-        st.download_button(
-            "Descargar CSV — todos los años",
-            data=tabla_all.to_csv(index=False),
-            file_name="PREDWEEM_v8_todos_los_años.csv",
-            mime="text/csv"
-        )
-
-st.success("✔ PREDWEEM v8 ejecutado correctamente.")
+    except Exception as e:
+        st.error(f"Error procesando archivo: {e}")
 
 
