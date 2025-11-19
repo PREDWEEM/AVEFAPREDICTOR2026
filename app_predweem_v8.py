@@ -1,7 +1,7 @@
 # ===============================================================
-# 🌾 PREDWEEM v8 — AVEFA Predictor 2026 (OPCIÓN C)
+# 🌾 PREDWEEM v8 — AVEFA Predictor 2026 (OPCIÓN C, REVISADA)
 # Clasificación meteorológica → patrón (Early / Intermediate / Late / Extended)
-# + ANN para EMERREL/EMERAC, percentiles, radar y certeza temporal
+# + ANN para EMERREL/EMERAC, percentiles y radar comparativo
 # ===============================================================
 
 import streamlit as st
@@ -28,12 +28,12 @@ header [data-testid="stToolbar"] {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🌾 AVEFA Predictor 2026 — PREDWEEM v8 (meteo→patrón + ANN emergencia)")
-st.subheader("Clasificación meteorológica por patrón (Early / Intermediate / Late / Extended) + análisis de emergencia simulada")
+st.title("🌾 AVEFA Predictor 2026 — PREDWEEM v8")
+st.subheader("Clasificación meteorológica (Early / Intermediate / Late / Extended) + Emergencia simulada (ANN)")
 
 st.info("""
 🔧 El modelo meteo→patrón se entrena automáticamente dentro de la app usando scikit-learn 1.7.2.  
-Además, se utiliza una ANN para simular la emergencia (EMERREL/EMERAC), calcular percentiles d25–d95, radar comparativo y certeza temporal.
+Además, se utiliza una ANN para simular la emergencia (EMERREL/EMERAC) y calcular percentiles d25–d95 y un radar comparativo año vs patrón.
 """)
 
 BASE = Path(__file__).parent if "__file__" in globals() else Path.cwd()
@@ -71,14 +71,14 @@ def _load_curves_emereac():
     curvas = {}
 
     # ---- 1977–1998 ----
-    xls1 = pd.ExcelFile(BASE / "emergencia_acumulada_interpolada 1977-1998.xlsx")
+    xls1 = pd.ExcelFile("emergencia_acumulada_interpolada 1977-1998.xlsx")
     for sh in xls1.sheet_names:
         df = pd.read_excel(xls1, sheet_name=sh)
         year = int(str(sh).split("_")[-1])
         curvas[year] = df[["JD", "EMERAC"]].copy()
 
     # ---- 2000–2015 ----
-    xls2 = pd.ExcelFile(BASE / "emergencia_2000_2015_interpolada.xlsx")
+    xls2 = pd.ExcelFile("emergencia_2000_2015_interpolada.xlsx")
     for sh in xls2.sheet_names:
         df = pd.read_excel(xls2, sheet_name=sh)
         year = int(str(sh).split("_")[-1])
@@ -92,7 +92,7 @@ def _assign_labels_from_centroids(curvas):
     Usa predweem_model_centroides.pkl para asignar patrón (Early/Int/Late/Ext)
     a cada año histórico según JD25–95.
     """
-    cent = joblib.load(BASE / "predweem_model_centroides.pkl")
+    cent = joblib.load("predweem_model_centroides.pkl")
     C = cent["centroides"]  # DataFrame: index = patrones, cols = JD25..JD95
 
     registros = []
@@ -114,15 +114,11 @@ def _assign_labels_from_centroids(curvas):
 
 
 # ===============================================================
-# 🔵 ETAPA 2 — FEATURES METEOROLÓGICAS
+# 🔵 ETAPA 2 — FEATURES METEOROLÓGICAS (IGUAL AL SCRIPT ORIGINAL)
 # ===============================================================
 
-def _load_meteo_historico_xls():
-    return pd.ExcelFile(BASE / "Bordenave_1977_2015_por_anio_con_JD.xlsx")
-
-
 def _build_meteo_features_for_years(labels_df):
-    xls = _load_meteo_historico_xls()
+    xls = pd.ExcelFile("Bordenave_1977_2015_por_anio_con_JD.xlsx")
     rows = []
 
     for _, row in labels_df.iterrows():
@@ -166,10 +162,11 @@ def _build_meteo_features_for_years(labels_df):
 
 
 # ===============================================================
-# 🔵 DETECCIÓN FLEXIBLE DE COLUMNAS METEOROLÓGICAS
+# 🔵 FEATURES PARA ARCHIVOS METEOROLÓGICOS NUEVOS (IGUAL AL ORIGINAL)
 # ===============================================================
 
-def _detect_meteo_columns(df: pd.DataFrame):
+def _build_features_from_df_meteo(df_meteo):
+    df = df_meteo.copy()
     cols = {c.lower(): c for c in df.columns}
 
     def pick(*names):
@@ -184,26 +181,9 @@ def _detect_meteo_columns(df: pd.DataFrame):
     c_tmin = pick("tmin", "temperatura_minima")
     c_tmax = pick("tmax", "temperatura_maxima")
     c_prec = pick("prec", "lluvia", "ppt", "prcp", "pluviometrica")
-    c_fecha = pick("fecha", "date")
 
-    return c_jd, c_tmin, c_tmax, c_prec, c_fecha
-
-
-def _build_features_from_df_meteo(df_meteo):
-    df = df_meteo.copy()
-    c_jd, c_tmin, c_tmax, c_prec, c_fecha = _detect_meteo_columns(df)
-
-    if c_jd is None and c_fecha is None:
-        raise ValueError("No se identificaron columnas de JD ni Fecha.")
-
-    if c_fecha is not None and c_jd is None:
-        df[c_fecha] = pd.to_datetime(df[c_fecha], dayfirst=True, errors="coerce")
-        df = df.dropna(subset=[c_fecha])
-        df["JD"] = df[c_fecha].dt.dayofyear
-        c_jd = "JD"
-
-    if None in (c_tmin, c_tmax, c_prec):
-        raise ValueError("No se identificaron correctamente TMIN/TMAX/Prec.")
+    if None in (c_jd, c_tmin, c_tmax, c_prec):
+        raise ValueError("No se identificaron correctamente JD/TMIN/TMAX/Prec.")
 
     df["JD"]   = pd.to_numeric(df[c_jd], errors="coerce")
     df["TMIN"] = pd.to_numeric(df[c_tmin], errors="coerce")
@@ -289,9 +269,8 @@ def predecir_patrones_multi_anio(df_meteo):
         df_meteo = df_meteo.dropna(subset=[col_anio])
         years = sorted(df_meteo[col_anio].unique())
     else:
-        # Sin fecha ni año → caso multianual (usar archivo histórico)
-        xls = _load_meteo_historico_xls()
-        years = [int(s) for s in xls.sheet_names]
+        # Sin fecha ni año → caso multianual (igual que el original)
+        years = list(range(1977, 2016))
 
     resultados = []
 
@@ -301,7 +280,7 @@ def predecir_patrones_multi_anio(df_meteo):
         elif col_anio:
             dfy = df_meteo[df_meteo[col_anio] == y]
         else:
-            xls = _load_meteo_historico_xls()
+            xls = pd.ExcelFile("Bordenave_1977_2015_por_anio_con_JD.xlsx")
             dfy = pd.read_excel(xls, sheet_name=str(y))
 
         try:
@@ -461,18 +440,16 @@ modelo_ann = safe(load_ann, "Error cargando pesos ANN (IW.npy, bias_IW.npy, LW.n
 if uploaded is not None:
     try:
         if uploaded.name.endswith(".csv"):
-            df_raw = pd.read_csv(uploaded)
+            df = pd.read_csv(uploaded)
         else:
-            df_raw = pd.read_excel(uploaded)
+            df = pd.read_excel(uploaded)
 
         st.success("Archivo cargado correctamente.")
-        st.dataframe(df_raw, use_container_width=True)
+        st.dataframe(df, use_container_width=True)
 
-        # Detectar columnas clave
-        col_fecha = next((c for c in df_raw.columns if "fecha" in c.lower()), None)
-        col_anio  = next((c for c in df_raw.columns if c.lower() in ["año", "ano", "year"]), None)
-
-        df = df_raw.copy()
+        # Detectar columnas Fecha/Año
+        col_fecha = next((c for c in df.columns if "fecha" in c.lower()), None)
+        col_anio  = next((c for c in df.columns if c.lower() in ["año", "ano", "year"]), None)
 
         if col_fecha:
             df[col_fecha] = pd.to_datetime(df[col_fecha], dayfirst=True, errors="coerce")
@@ -486,10 +463,12 @@ if uploaded is not None:
 
         else:
             st.info("No se encontró columna Fecha ni Año. Interpretando archivo como multianual (1977–2015).")
-            xls = _load_meteo_historico_xls()
-            years = [int(s) for s in xls.sheet_names]
+            years = list(range(1977, 2016))
 
-        opcion = st.radio("¿Qué deseás analizar?", ["Todos los años (solo patrón meteo)", "Seleccionar un año específico (patrón + emergencia simulada)"])
+        opcion = st.radio("¿Qué deseás analizar?", [
+            "Todos los años (solo patrón meteo)",
+            "Seleccionar un año específico (patrón + emergencia simulada)"
+        ])
 
         # -------------------------------------------------------
         # TODOS LOS AÑOS → SOLO CLASIFICACIÓN METEOROLÓGICA
@@ -519,7 +498,7 @@ if uploaded is not None:
             elif col_anio:
                 dfy = df[df[col_anio] == year_sel].copy()
             else:
-                xls = _load_meteo_historico_xls()
+                xls = pd.ExcelFile("Bordenave_1977_2015_por_anio_con_JD.xlsx")
                 dfy = pd.read_excel(xls, sheet_name=str(year_sel))
 
             st.write(f"### 📅 Año seleccionado: {year_sel}")
@@ -539,15 +518,31 @@ if uploaded is not None:
             if modelo_ann is not None:
                 st.subheader("🔍 Emergencia simulada por ANN (EMERREL / EMERAC)")
 
-                # Detectar columnas meteo para ANN
-                c_jd, c_tmin, c_tmax, c_prec, c_fecha = _detect_meteo_columns(dfy)
+                # Detectar columnas mínimas para ANN (simple, sin tocar el clasificador)
+                cols = {c.lower(): c for c in dfy.columns}
+
+                def pick(*names):
+                    for n in names:
+                        for col_low, col_orig in cols.items():
+                            if n.lower() in col_low:
+                                return col_orig
+                    return None
+
+                c_jd   = pick("jd", "dia", "julian", "doy")
+                c_tmin = pick("tmin", "temperatura_minima")
+                c_tmax = pick("tmax", "temperatura_maxima")
+                c_prec = pick("prec", "lluvia", "ppt", "prcp", "pluviometrica")
 
                 df_ann = dfy.copy()
-                if c_jd is None and c_fecha is not None:
-                    df_ann[c_fecha] = pd.to_datetime(df_ann[c_fecha], dayfirst=True, errors="coerce")
-                    df_ann = df_ann.dropna(subset=[c_fecha])
-                    df_ann["JD"] = df_ann[c_fecha].dt.dayofyear
-                    c_jd = "JD"
+
+                # Si no hay JD pero sí Fecha, generamos JD
+                if c_jd is None:
+                    col_fecha_local = pick("fecha", "date")
+                    if col_fecha_local is not None:
+                        df_ann[col_fecha_local] = pd.to_datetime(df_ann[col_fecha_local], dayfirst=True, errors="coerce")
+                        df_ann = df_ann.dropna(subset=[col_fecha_local])
+                        df_ann["JD"] = df_ann[col_fecha_local].dt.dayofyear
+                        c_jd = "JD"
 
                 if c_jd is None or None in (c_tmin, c_tmax, c_prec):
                     st.info("No se pudieron identificar JD/TMIN/TMAX/Prec correctamente para ejecutar la ANN.")
@@ -603,7 +598,7 @@ if uploaded is not None:
                         st.pyplot(fig_ac)
 
                     # ----- Cobertura temporal -----
-                    st.subheader("🗓️ Cobertura temporal de los datos")
+                    st.subheader("🗓️ Cobertura temporal de los datos (ANN)")
                     JD_START = int(dias.min())
                     JD_END   = int(dias.max())
                     TEMPORADA_MAX = 274  # 1-ene → 1-oct, aprox. temporada completa
@@ -619,7 +614,7 @@ if uploaded is not None:
                     resp = calc_percentiles_trunc(dias, emerac)
                     if resp is not None:
                         d25, d50, d75, d95 = resp
-                        st.subheader("📌 Percentiles simulados del año (sobre lo emergido hasta la fecha)")
+                        st.subheader("📌 Percentiles simulados del año (ANN, sobre lo emergido hasta la fecha)")
                         st.write({
                             "d25 (del período observado)": round(d25, 1),
                             "d50 (del período observado)": round(d50, 1),
@@ -627,11 +622,11 @@ if uploaded is not None:
                             "d95 (del período observado)": round(d95, 1)
                         })
 
-                        # ----- Radar comparativo: año vs patrón meteo predicho -----
-                        st.subheader("🎯 Radar comparativo JD25–95: Año vs patrón meteo predicho")
+                        # ----- Radar comparativo JD25–95: año vs patrón meteo predicho -----
+                        st.subheader("🎯 Radar comparativo JD25–95: Año (ANN) vs patrón meteo predicho")
 
                         try:
-                            cent = joblib.load(BASE / "predweem_model_centroides.pkl")
+                            cent = joblib.load("predweem_model_centroides.pkl")
                             C = cent["centroides"]  # DataFrame
                             if patron_pred in C.index:
                                 vals_year = [d25, d50, d75, d95]
@@ -643,171 +638,13 @@ if uploaded is not None:
                                         "Patrón predicho": vals_pat
                                     },
                                     labels=["d25", "d50", "d75", "d95"],
-                                    title=f"Radar — Año {year_sel} vs patrón {patron_pred}"
+                                    title=f"Radar — Año {year_sel} (ANN) vs patrón {patron_pred}"
                                 )
                                 st.pyplot(fig_rad)
                             else:
                                 st.info("El patrón predicho no se encuentra en la tabla de centroides (predweem_model_centroides.pkl).")
                         except Exception as e:
                             st.error(f"No se pudo generar el radar comparativo: {e}")
-
-                        # ===== CERTEZA TEMPORAL DEL PATRÓN METEOROLÓGICO =====
-                        st.subheader("📈 Certeza temporal del patrón (meteo → día por día)")
-                        model = load_clf()
-
-                        # Determinar fechas o JD para el eje X
-                        c_jd2, _, _, _, c_fecha2 = _detect_meteo_columns(dfy)
-                        df_prob = dfy.copy()
-                        fechas_eval = []
-                        dias_eval = []
-                        probs_clase = []
-
-                        clases_model = model.classes_
-                        if patron_pred not in clases_model:
-                            st.info("El patrón predicho no está en las clases del modelo. No se puede calcular certeza temporal.")
-                        else:
-                            idx_patron = list(clases_model).index(patron_pred)
-
-                            # Orden temporal
-                            if c_fecha2:
-                                df_prob[c_fecha2] = pd.to_datetime(df_prob[c_fecha2], dayfirst=True, errors="coerce")
-                                df_prob = df_prob.dropna(subset=[c_fecha2])
-                                df_prob = df_prob.sort_values(c_fecha2)
-                            elif c_jd2:
-                                df_prob[c_jd2] = pd.to_numeric(df_prob[c_jd2], errors="coerce")
-                                df_prob = df_prob.dropna(subset=[c_jd2])
-                                df_prob = df_prob.sort_values(c_jd2)
-
-                            registros = df_prob.index.to_list()
-
-                            for i in range(5, len(registros)+1):
-                                idxs = registros[:i]
-                                df_parc = df_prob.loc[idxs]
-
-                                try:
-                                    X_parc = _build_features_from_df_meteo(df_parc)
-                                    proba_i = model.predict_proba(X_parc)[0]
-                                    p_clase = float(proba_i[idx_patron])
-
-                                    if c_fecha2:
-                                        fechas_eval.append(df_parc[c_fecha2].iloc[-1])
-                                        dias_eval.append(df_parc[c_fecha2].dt.dayofyear.iloc[-1])
-                                    elif c_jd2:
-                                        fechas_eval.append(None)
-                                        dias_eval.append(df_parc[c_jd2].iloc[-1])
-                                    else:
-                                        fechas_eval.append(None)
-                                        dias_eval.append(i)
-
-                                    probs_clase.append(p_clase)
-                                except Exception:
-                                    continue
-
-                            if len(probs_clase) == 0:
-                                st.info("No se pudo calcular la evolución temporal de probabilidad del patrón.")
-                            else:
-                                UMBRAL = 0.8
-                                idx_crit = next((i for i, p in enumerate(probs_clase) if p >= UMBRAL), None)
-                                idx_max  = int(np.argmax(probs_clase))
-
-                                fecha_crit = None
-                                prob_crit  = None
-                                fecha_max  = None
-                                prob_max   = float(probs_clase[idx_max])
-
-                                if c_fecha2:
-                                    if idx_crit is not None:
-                                        fecha_crit = fechas_eval[idx_crit]
-                                        prob_crit  = probs_clase[idx_crit]
-                                    fecha_max = fechas_eval[idx_max]
-                                else:
-                                    if idx_crit is not None:
-                                        fecha_crit = dias_eval[idx_crit]
-                                        prob_crit  = probs_clase[idx_crit]
-                                    fecha_max = dias_eval[idx_max]
-
-                                # Gráfico
-                                figp, axp = plt.subplots(figsize=(9, 5))
-                                if c_fecha2:
-                                    axp.plot(fechas_eval, probs_clase, label=f"Probabilidad {patron_pred}", color="green", lw=2.0)
-                                    if fecha_crit is not None:
-                                        axp.axvline(fecha_crit, color="green", linestyle="--", linewidth=2,
-                                                    label=f"Momento crítico ({patron_pred})")
-                                    if fecha_max is not None and (fecha_crit is None or fecha_max != fecha_crit):
-                                        axp.axvline(fecha_max, color="blue", linestyle=":", linewidth=2,
-                                                    label="Fecha máxima certeza")
-                                    axp.set_xlabel("Fecha calendario real")
-                                else:
-                                    axp.plot(dias_eval, probs_clase, label=f"Probabilidad {patron_pred}", color="green", lw=2.0)
-                                    if fecha_crit is not None:
-                                        axp.axvline(fecha_crit, color="green", linestyle="--", linewidth=2,
-                                                    label=f"Momento crítico ({patron_pred})")
-                                    if fecha_max is not None and (fecha_crit is None or fecha_max != fecha_crit):
-                                        axp.axvline(fecha_max, color="blue", linestyle=":", linewidth=2,
-                                                    label="Máxima certeza")
-                                    axp.set_xlabel("Día juliano")
-
-                                axp.set_ylim(0, 1)
-                                axp.set_ylabel("Probabilidad")
-                                axp.set_title("Evolución de la certeza del patrón (meteo)")
-                                axp.legend()
-                                if c_fecha2:
-                                    figp.autofmt_xdate()
-                                st.pyplot(figp)
-
-                                # Resumen + nivel de confianza
-                                st.markdown("### 🧠 Momento crítico de definición del patrón (meteo)")
-
-                                if fecha_crit is not None:
-                                    if c_fecha2:
-                                        fecha_crit_str = fecha_crit.strftime('%d-%b')
-                                        fecha_max_str  = fecha_max.strftime('%d-%b') if fecha_max is not None else "-"
-                                    else:
-                                        fecha_crit_str = f"JD {fecha_crit:.0f}"
-                                        fecha_max_str  = f"JD {fecha_max:.0f}" if fecha_max is not None else "-"
-
-                                    st.write(
-                                        f"- **Patrón resultante:** {patron_pred}  \n"
-                                        f"- **Momento crítico (primer día con prob ≥ {UMBRAL:.0%}):** "
-                                        f"**{fecha_crit_str}**  \n"
-                                        f"- **Probabilidad en ese día:** {prob_crit:.2f}  \n"
-                                        f"- **Momento de máxima certeza:** {fecha_max_str} "
-                                        f"(prob = {prob_max:.2f})"
-                                    )
-                                else:
-                                    if c_fecha2:
-                                        fecha_max_str = fecha_max.strftime('%d-%b')
-                                    else:
-                                        fecha_max_str = f"JD {fecha_max:.0f}"
-
-                                    st.write(
-                                        f"- **Patrón resultante:** {patron_pred}  \n"
-                                        f"- No se alcanza el umbral de {UMBRAL:.0%}, "
-                                        f"pero la máxima certeza se logra en "
-                                        f"**{fecha_max_str}** con probabilidad **{prob_max:.2f}**."
-                                    )
-
-                                # Nivel de confianza global (heurístico)
-                                if prob_max is not None:
-                                    if cobertura >= 0.7 and prob_max >= 0.8:
-                                        nivel_conf = "ALTA"
-                                        color_conf = "green"
-                                    elif cobertura >= 0.4 and prob_max >= 0.65:
-                                        nivel_conf = "MEDIA"
-                                        color_conf = "orange"
-                                    else:
-                                        nivel_conf = "BAJA"
-                                        color_conf = "red"
-
-                                    st.markdown(
-                                        f"### 🔒 Nivel de confianza de la clasificación (meteo): "
-                                        f"<span style='color:{color_conf}; font-size:26px;'>{nivel_conf}</span>",
-                                        unsafe_allow_html=True
-                                    )
-                                    st.write(
-                                        f"- **Cobertura temporal:** {cobertura*100:.1f} % de la temporada estimada  \n"
-                                        f"- **Probabilidad máxima del patrón resultante:** {prob_max:.2f}"
-                                    )
 
                     # ----- Descarga de serie simulada -----
                     csv_ann = df_ann.to_csv(index=False).encode("utf-8")
@@ -830,5 +667,3 @@ if uploaded is not None:
         st.error(f"❌ Error procesando archivo: {e}")
 else:
     st.info("⬆️ Subí un archivo para comenzar.")
-
-
