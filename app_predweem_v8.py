@@ -361,11 +361,70 @@ if uploaded is not None:
         # ¿Tiene columna Fecha?
         tiene_fecha = any("fecha" in c.lower() for c in df.columns)
 
-        if tiene_fecha:
-            st.subheader("🔍 Detección de múltiples años")
+           if tiene_fecha:
+        st.subheader("🔍 Detección de múltiples años en el archivo")
+    
+        # Convertir fecha
+        col_fecha = None
+        for c in df.columns:
+            if "fecha" in c.lower():
+                col_fecha = c
+                break
+    
+        df[col_fecha] = pd.to_datetime(df[col_fecha], dayfirst=True, errors="coerce")
+        df = df.dropna(subset=[col_fecha])
+    
+        years = sorted(df[col_fecha].dt.year.unique())
+    
+        # -------------------------------------------
+        # 🟦 SELECTOR DE AÑO
+        # -------------------------------------------
+        opcion = st.radio(
+            "¿Qué deseás analizar?",
+            ["Todos los años", "Seleccionar un año específico"],
+            index=0
+        )
+    
+        # ------------- TODOS LOS AÑOS -------------
+        if opcion == "Todos los años":
             tabla = predecir_patrones_multi_anio(df)
-            st.success("Archivo con múltiples años procesado correctamente.")
+            st.success("Archivo multianual procesado correctamente (todos los años).")
+    
+            st.subheader("📊 Resultados de patrones por año")
+            st.dataframe(tabla, use_container_width=True)
+    
+            st.download_button(
+                "📥 Descargar tabla completa (CSV)",
+                tabla.to_csv(index=False).encode("utf-8"),
+                file_name="patrones_por_anio.csv",
+                mime="text/csv"
+            )
+    
+        # ------------- UN SOLO AÑO -------------
+        else:
+            year_sel = st.selectbox("Seleccionar año:", years)
+    
+            dfy = df[df[col_fecha].dt.year == year_sel].copy()
+            st.write(f"### 📅 Año seleccionado: {year_sel}")
+            st.dataframe(dfy, use_container_width=True)
+    
+            try:
+                res = predecir_patron(dfy)
+                st.markdown(f"### 🌱 Patrón predicho: **{res['clasificacion']}**")
+                st.json(res["probabilidades"])
+    
+                # Exportar DF del año
+                st.download_button(
+                    f"📥 Descargar datos del año {year_sel}",
+                    dfy.to_csv(index=False).encode("utf-8"),
+                    file_name=f"meteo_{year_sel}.csv",
+                    mime="text/csv"
+                )
 
+        except Exception as e:
+            st.error(f"Error procesando el año {year_sel}: {e}")
+:
+            
             st.subheader("📊 Resultados de patrones por año")
             st.dataframe(tabla, use_container_width=True)
 
