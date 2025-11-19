@@ -355,3 +355,4 @@ if uploaded is not None:
         st.error(f"❌ Error procesando archivo: {e}")
 else:
     st.info("⬆️ Subí un archivo para comenzar.")
+
