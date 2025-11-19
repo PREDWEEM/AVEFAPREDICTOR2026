@@ -1,8 +1,6 @@
-streamlit>=1.37
-opencv-python-headless
-numpy>=1.26
-pandas>=2.2
-plotly>=5.22
-matplotlib
-scipy
-xlsxwriter
+streamlit
+pandas
+numpy
+plotly
+joblib
+scikit-learn
