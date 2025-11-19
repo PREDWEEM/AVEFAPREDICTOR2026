@@ -4,4 +4,4 @@ numpy
 plotly
 openpyxl
 joblib
-scikit-learn==1.7.2
+scikit-learn==1.1.3
