@@ -6,6 +6,8 @@
 # ===============================================================
 
 import streamlit as st
+import sklearn
+st.sidebar.write("🔬 sklearn versión:", sklearn.__version__)
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
