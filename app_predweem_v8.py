@@ -12,10 +12,6 @@ import streamlit as st
 import sklearn
 import sys
 
-st.sidebar.write("🔍 Python:", sys.version)
-st.sidebar.write("🔍 sklearn:", sklearn.__version__)
-
-
 import streamlit as st
 import sklearn
 st.sidebar.write("🔬 sklearn versión:", sklearn.__version__)
