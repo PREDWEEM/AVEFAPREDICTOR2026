@@ -8,12 +8,13 @@ import sklearn
 import sys
 import pkgutil
 import subprocess
-
 import streamlit as st
+import sklearn
+import sys
 
-st.sidebar.write("🔧 Python:", sys.version)
-st.sidebar.write("🔧 sklearn version:", sklearn.__version__)
-st.sidebar.write("🔧 Packages loaded:", [m.name for m in pkgutil.iter_modules()])
+st.sidebar.write("🔍 Python:", sys.version)
+st.sidebar.write("🔍 sklearn:", sklearn.__version__)
+
 
 import streamlit as st
 import sklearn
