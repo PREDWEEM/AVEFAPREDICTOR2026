@@ -4,6 +4,16 @@
 # Versión corregida y adaptada al archivo real:
 # Bordenave_1977_2015_por_anio_con_JD.xlsx
 # ===============================================================
+import sklearn
+import sys
+import pkgutil
+import subprocess
+
+import streamlit as st
+
+st.sidebar.write("🔧 Python:", sys.version)
+st.sidebar.write("🔧 sklearn version:", sklearn.__version__)
+st.sidebar.write("🔧 Packages loaded:", [m.name for m in pkgutil.iter_modules()])
 
 import streamlit as st
 import sklearn
