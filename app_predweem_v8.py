@@ -257,25 +257,6 @@ def postprocess_emergence(emerrel_raw, smooth=True, window=3, clip=True):
     return emer, emerac
 
 
-# ===============================================================
-# 🔵 6. RADAR JD25–95
-# ===============================================================
-def radar(vals_year, vals_patron, patron_name, year_sel):
-    labels = ["d25","d50","d75","d95"]
-    vals_year = list(vals_year) + [vals_year[0]]
-    vals_patron = list(vals_patron) + [vals_patron[0]]
-
-    ang = np.linspace(0, 2*np.pi, len(labels), endpoint=False)
-    ang = np.concatenate([ang, [ang[0]]])
-
-    fig = plt.figure(figsize=(6,6))
-    ax = fig.add_subplot(111, polar=True)
-
-    ax.plot(ang, vals_year, lw=3, label=f"Año {year_sel}", color="blue")
-    ax.fill(ang, vals_year, alpha=0.25, color="blue")
-
-    ax.plot(ang, vals_patron, lw=2, label=f"Patrón {patron_name}", color="green")
-    ax.fill(ang, vals_patron,  alpha=0
 
 
 
