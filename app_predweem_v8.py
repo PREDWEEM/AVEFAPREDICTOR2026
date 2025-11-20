@@ -3,6 +3,7 @@
 # - ENTRENAMIENTO INTERNO meteo→patrón usando centroides
 # - ANN → EMERREL diaria + EMERAC acumulada
 # - Percentiles d25–d95 (curva ANN) + Radar año vs patrón
+# - Certeza diaria del patrón (probabilidad día a día)
 # - Compatible con meteo_daily.csv (Julian_days, TMAX, TMIN, Prec)
 # ===============================================================
 
@@ -52,7 +53,6 @@ def _compute_jd_percentiles(jd, emerac, qs=(0.25, 0.5, 0.75, 0.95)):
     jd = np.asarray(jd, float)
     emer = np.asarray(emerac, float)
 
-    # Ordenar por JD
     order = np.argsort(jd)
     jd = jd[order]
     emer = emer[order]
@@ -69,7 +69,7 @@ def _compute_jd_percentiles(jd, emerac, qs=(0.25, 0.5, 0.75, 0.95)):
 
 def _load_curves_emereac():
     """
-    Lee curvas de emergencia acumulada histórica desde:
+    Lee curvas EMERAC históricas desde:
     - emergencia_acumulada_interpolada 1977-1998.xlsx
     - emergencia_2000_2015_interpolada.xlsx
     Devuelve dict: year -> DataFrame[JD, EMERAC]
@@ -179,7 +179,7 @@ def _build_meteo_features_for_years(labels_df):
     return pd.DataFrame(rows)
 
 # ===============================================================
-# 🔵 3. DETECCIÓN ROBUSTA DE COLUMNAS EN ARCHIVOS NUEVOS
+# 🔵 3. FEATURES PARA ARCHIVOS METEOROLÓGICOS NUEVOS
 # ===============================================================
 def _build_features_from_df_meteo(df_meteo):
     df = df_meteo.copy()
@@ -205,6 +205,7 @@ def _build_features_from_df_meteo(df_meteo):
     c_tmin = pick("tmin", "temperatura_minima")
     c_tmax = pick("tmax", "temperatura_maxima")
     c_prec = pick("prec", "lluvia", "ppt", "prcp", "pluviometrica")
+    c_fecha = pick("fecha", "date")
 
     if None in (c_jd, c_tmin, c_tmax, c_prec):
         raise ValueError("No se identificaron correctamente JD/TMIN/TMAX/Prec en el archivo cargado.")
@@ -213,8 +214,12 @@ def _build_features_from_df_meteo(df_meteo):
     df["TMIN"] = pd.to_numeric(df[c_tmin], errors="coerce")
     df["TMAX"] = pd.to_numeric(df[c_tmax], errors="coerce")
     df["Prec"] = pd.to_numeric(df[c_prec], errors="coerce")
+    if c_fecha is not None:
+        df["Fecha"] = pd.to_datetime(df[c_fecha], errors="coerce")
 
     df = df.dropna(subset=["JD"])
+    df = df.sort_values("JD")
+
     df["Tmed"] = (df["TMIN"] + df["TMAX"]) / 2
 
     feats = {
@@ -229,18 +234,15 @@ def _build_features_from_df_meteo(df_meteo):
     feats["Tmed_FM"] = sub["Tmed"].mean()
     feats["Prec_FM"] = sub["Prec"].sum()
 
-    return pd.DataFrame([feats]), df  # devuelvo también df limpio para ANN
+    return pd.DataFrame([feats]), df  # devuelvo también df limpio para ANN y certeza diaria
 
 # ===============================================================
 # 🔵 4. ENTRENAMIENTO INTERNO CLASIFICADOR METEO → PATRÓN
 # ===============================================================
 @st.cache_resource
 def load_clf():
-    # 1) Curvas históricas → JD25–95 → patrón
     curvas = _load_curves_emereac()
     labels_df = _assign_labels_from_centroids(curvas)
-
-    # 2) Meteo histórica → features + patrón
     feat_df = _build_meteo_features_for_years(labels_df).dropna()
 
     X = feat_df[[
@@ -366,7 +368,7 @@ if uploaded is not None:
     st.success("Archivo cargado correctamente.")
     st.dataframe(df_raw, use_container_width=True)
 
-    # Clasificación + limpieza (df_limpio listo para ANN)
+    # --- CLASIFICACIÓN METEOROLÓGICA + DF LIMPIO PARA ANN ---
     try:
         patron_pred, probs, df_meteo = predecir_patron(df_raw)
     except Exception as e:
@@ -377,12 +379,179 @@ if uploaded is not None:
     st.json(probs)
 
     # ===========================================================
+    # 📈 CERTEZA DIARIA DEL PATRÓN
+    # ===========================================================
+    st.subheader("📈 Certeza temporal del patrón (día por día)")
+
+    try:
+        model = load_clf()
+        clases = model.classes_
+        idx_sel = np.where(clases == patron_pred)[0][0]
+
+        dias_eval = []
+        fechas_eval = []
+        prob_sel = []
+
+        # Intentar detectar columna Fecha en df_meteo
+        fecha_col = next((c for c in df_meteo.columns if "fecha" in c.lower() or "date" in c.lower()), None)
+        if fecha_col is not None:
+            df_meteo[fecha_col] = pd.to_datetime(df_meteo[fecha_col], errors="coerce")
+
+        jd_unique = np.sort(df_meteo["JD"].unique())
+
+        for jd_max in jd_unique:
+            df_parc = df_meteo[df_meteo["JD"] <= jd_max].copy()
+            if len(df_parc) < 5:
+                # evitar ruido con muy pocos días
+                continue
+
+            # Features parciales
+            df_parc["Tmed"] = (df_parc["TMIN"] + df_parc["TMAX"]) / 2
+
+            Tmin_mean = df_parc["TMIN"].mean()
+            Tmax_mean = df_parc["TMAX"].mean()
+            Tmed_mean = df_parc["Tmed"].mean()
+            Prec_total = df_parc["Prec"].sum()
+            Prec_days_10mm = (df_parc["Prec"] >= 10).sum()
+
+            sub = df_parc[df_parc["JD"] <= 121]
+            Tmed_FM = sub["Tmed"].mean()
+            Prec_FM = sub["Prec"].sum()
+
+            X_day = pd.DataFrame([{
+                "Tmin_mean": Tmin_mean,
+                "Tmax_mean": Tmax_mean,
+                "Tmed_mean": Tmed_mean,
+                "Prec_total": Prec_total,
+                "Prec_days_10mm": Prec_days_10mm,
+                "Tmed_FM": Tmed_FM,
+                "Prec_FM": Prec_FM
+            }])
+
+            proba_day = model.predict_proba(X_day)[0]
+            p_sel = float(proba_day[idx_sel])
+
+            dias_eval.append(jd_max)
+            prob_sel.append(p_sel)
+
+            if fecha_col is not None:
+                fechas_eval.append(df_parc[fecha_col].max())
+            else:
+                fechas_eval.append(None)
+
+        # Cobertura temporal estimada (1-ene → 1-oct ~ JD 1–274)
+        TEMPORADA_MAX = 274
+        JD_START = int(df_meteo["JD"].min())
+        JD_END   = int(df_meteo["JD"].max())
+        cobertura = (JD_END - JD_START + 1) / TEMPORADA_MAX
+
+        # Momento crítico y máxima certeza
+        UMBRAL = 0.8
+        idx_crit = next((i for i, p in enumerate(prob_sel) if p >= UMBRAL), None)
+        idx_max = int(np.argmax(prob_sel)) if len(prob_sel) > 0 else None
+
+        fecha_crit = None
+        prob_crit = None
+        if idx_crit is not None:
+            prob_crit = prob_sel[idx_crit]
+            fecha_crit = fechas_eval[idx_crit]
+
+        fecha_max = None
+        prob_max = None
+        if idx_max is not None:
+            prob_max = prob_sel[idx_max]
+            fecha_max = fechas_eval[idx_max]
+
+        # Gráfico
+        figp, axp = plt.subplots(figsize=(9,5))
+        if fecha_col is not None and all(f is not None for f in fechas_eval):
+            x_axis = fechas_eval
+            axp.set_xlabel("Fecha calendario")
+        else:
+            x_axis = dias_eval
+            axp.set_xlabel("Día juliano")
+
+        axp.plot(x_axis, prob_sel, label=f"P({patron_pred})", color="green", lw=2)
+
+        if fecha_crit is not None:
+            axp.axvline(x_axis[idx_crit], color="green", linestyle="--", linewidth=2,
+                        label=f"Momento crítico (P≥{UMBRAL:.0%})")
+
+        if fecha_max is not None and idx_max is not None:
+            axp.axvline(x_axis[idx_max], color="blue", linestyle=":", linewidth=2,
+                        label="Máxima certeza")
+
+        axp.set_ylim(0,1)
+        axp.set_ylabel("Probabilidad del patrón seleccionado")
+        axp.set_title("Evolución diaria de la certeza del patrón")
+        axp.legend()
+        figp.autofmt_xdate()
+        st.pyplot(figp)
+
+        # Resumen textual
+        st.markdown("### 🧠 Momento crítico de definición del patrón")
+        if fecha_crit is not None:
+            if isinstance(fecha_crit, pd.Timestamp):
+                crit_str = fecha_crit.strftime("%d-%b")
+            else:
+                crit_str = f"JD {dias_eval[idx_crit]}"
+            if isinstance(fecha_max, pd.Timestamp):
+                max_str = fecha_max.strftime("%d-%b")
+            else:
+                max_str = f"JD {dias_eval[idx_max]}"
+
+            st.write(
+                f"- **Patrón resultante:** {patron_pred}  \n"
+                f"- **Momento crítico (primer día con P≥{UMBRAL:.0%}):** **{crit_str}** "
+                f"(P = {prob_crit:.2f})  \n"
+                f"- **Fecha/día de máxima certeza:** **{max_str}** "
+                f"(P = {prob_max:.2f})"
+            )
+        elif prob_max is not None:
+            if isinstance(fecha_max, pd.Timestamp):
+                max_str = fecha_max.strftime("%d-%b")
+            else:
+                max_str = f"JD {dias_eval[idx_max]}"
+            st.write(
+                f"- **Patrón resultante:** {patron_pred}  \n"
+                f"- No se alcanzó el umbral de {UMBRAL:.0%}, "
+                f"pero la máxima certeza se logra en **{max_str}** "
+                f"con P = **{prob_max:.2f}**."
+            )
+        else:
+            st.info("No se pudo calcular la evolución de probabilidad del patrón.")
+
+        # Nivel de confianza global (ALTA / MEDIA / BAJA)
+        if prob_max is not None:
+            if cobertura >= 0.7 and prob_max >= 0.8:
+                nivel_conf = "ALTA"
+                color_conf = "green"
+            elif cobertura >= 0.4 and prob_max >= 0.65:
+                nivel_conf = "MEDIA"
+                color_conf = "orange"
+            else:
+                nivel_conf = "BAJA"
+                color_conf = "red"
+
+            st.markdown(
+                f"### 🔒 Nivel de confianza global: "
+                f"<span style='color:{color_conf}; font-size:26px;'>{nivel_conf}</span>",
+                unsafe_allow_html=True
+            )
+            st.write(
+                f"- **Cobertura temporal:** {cobertura*100:.1f} % de la temporada (1-ene→1-oct)  \n"
+                f"- **Probabilidad máxima del patrón seleccionado:** {prob_max:.2f}"
+            )
+
+    except Exception as e:
+        st.error(f"No se pudo calcular la certeza diaria del patrón: {e}")
+
+    # ===========================================================
     # ANN solo si tenemos modelo y columnas mínimas
     # ===========================================================
     if modelo_ann is not None:
         st.subheader("🔍 Emergencia simulada por ANN (EMERREL / EMERAC)")
 
-        # df_meteo ya está limpio y con columnas JD, TMAX, TMIN, Prec
         if not all(c in df_meteo.columns for c in ["JD", "TMAX", "TMIN", "Prec"]):
             st.info("No se identificaron correctamente JD/TMAX/TMIN/Prec para ejecutar la ANN.")
         else:
@@ -475,7 +644,5 @@ if uploaded is not None:
 
 else:
     st.info("⬆️ Subí un archivo para comenzar.")
-
-
 
 
