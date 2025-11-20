@@ -612,32 +612,7 @@ if uploaded is not None:
                     st.write(f"- **RMSE normalizado (0–1):** `{rmse_norm:.5f}`")
                     st.write(f"- **RMSE crudo:** `{rmse_raw:.5f}`  (si ambas curvas están en escala comparable)")
 
-                    st.subheader("📈 Curvas comparativas — ANN vs Observada")
-                    fig_super = plot_comparativo_curvas(
-                        dias,
-                        emerac,
-                        emerac_obs_interp,
-                        nombre_obs="Curva observada"
-                    )
-                    st.pyplot(fig_super)
-
-                    perc_pred = _compute_jd_percentiles(dias, emerac)
-                    perc_obs  = _compute_jd_percentiles(dias, emerac_obs_interp)
-
-                    if perc_pred is not None and perc_obs is not None:
-                        st.subheader("🎨 Comparativo visual ANN vs Observada")
-                        fig_visual = plot_comparativo_visual(
-                            dias,
-                            emerac,
-                            emerac_obs_interp,
-                            perc_pred=perc_pred,
-                            perc_obs=perc_obs,
-                            nombre_obs="Curva observada"
-                        )
-                        st.pyplot(fig_visual)
-            except Exception as e:
-                st.error(f"No se pudo procesar la curva observada: {e}")
-
+                    
     # ===============================================================
     # 🔵 9. COMPARACIÓN CON PATRÓN MÁS CERCANO (CENTROIDES)
     # ===============================================================
