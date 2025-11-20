@@ -799,6 +799,49 @@ if uploaded is not None:
                 mime="text/csv"
             )
 
+            # ---------------------------------------------------------
+            # 🎨 GRÁFICO COMPARATIVO VISUAL (ANN vs Observada)
+            # ---------------------------------------------------------
+            def plot_comparativo_visual(jd, emerac_pred, emerac_obs, 
+                                        perc_pred=None, perc_obs=None, nombre_obs="Observada"):
+                fig, ax = plt.subplots(figsize=(12, 6))
+            
+                emerac_pred = np.asarray(emerac_pred, float)
+                emerac_obs  = np.asarray(emerac_obs, float)
+            
+                # Normalización
+                pred = emerac_pred / emerac_pred.max() if emerac_pred.max() > 0 else emerac_pred
+                obs  = emerac_obs  / emerac_obs.max()  if emerac_obs.max()  > 0 else emerac_obs
+            
+                # Curvas
+                ax.plot(jd, pred, color="blue", linewidth=3, label="Predicha (ANN)")
+                ax.plot(jd, obs,  color="red", linestyle="--", linewidth=2, label=nombre_obs)
+            
+                # Banda visual de diferencia
+                diff = np.abs(pred - obs)
+                ax.fill_between(jd, pred, obs, color="gray", alpha=0.25,
+                                label="Diferencia |Pred - Obs|")
+            
+                # Percentiles (marcas verticales)
+                if perc_pred is not None:
+                    for p, c in zip(perc_pred, ["#0033aa", "#0044dd", "#0055ff", "#0077ff"]):
+                        ax.axvline(p, color=c, linestyle="-", alpha=0.7, linewidth=1.8)
+            
+                if perc_obs is not None:
+                    for p, c in zip(perc_obs, ["#aa0000", "#cc0000", "#ee0000", "#ff2222"]):
+                        ax.axvline(p, color=c, linestyle="--", alpha=0.8, linewidth=1.7)
+            
+                ax.set_xlabel("Día Juliano")
+                ax.set_ylabel("Emergencia acumulada normalizada (0–1)")
+                ax.set_title("Comparación visual — EMERAC Predicha vs Observada")
+                ax.grid(alpha=0.25)
+                ax.legend()
+            
+                return fig
+
+
+
+
 
 
 
