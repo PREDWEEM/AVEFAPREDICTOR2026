@@ -1,11 +1,12 @@
 # ===============================================================
-# 🌾 PREDWEEM v8.0 — AVEFA Predictor 2026 (Con ANN + Clasificación)
+# 🌾 PREDWEEM v8.2 — AVEFA Predictor 2026 (Con ANN + Clasificación)
 # - ENTRENAMIENTO INTERNO meteo→patrón usando centroides
 # - ANN → EMERREL diaria + EMERAC acumulada
 # - Percentiles d25–d95 (curva ANN) + Radar año vs patrón
 # - Certeza diaria del patrón (probabilidad día a día)
 # - Comparación con curva observada + RMSE
 # - Gráfico comparativo superpuesto + comparativo visual profesional
+# - Comparación con patrón más cercano por centroides + año representativo
 # - Compatible con meteo_daily.csv (Julian_days, TMAX, TMIN, Prec)
 # ===============================================================
 
@@ -22,7 +23,7 @@ from sklearn.pipeline import Pipeline
 # ---------------------------------------------------------
 # CONFIG STREAMLIT
 # ---------------------------------------------------------
-st.set_page_config(page_title="PREDWEEM v8 — AVEFA 2026", layout="wide")
+st.set_page_config(page_title="PREDWEEM v8.2 — AVEFA 2026", layout="wide")
 st.markdown("""
 <style>
 #MainMenu {visibility: hidden;}
@@ -33,7 +34,7 @@ header [data-testid="stToolbar"] {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🌾 PREDWEEM v8 — AVEFA Predictor 2026")
+st.title("🌾 PREDWEEM v8.2 — AVEFA Predictor 2026")
 st.subheader("Clasificación meteorológica + Emergencia simulada por ANN")
 
 BASE = Path(__file__).parent if "__file__" in globals() else Path.cwd()
@@ -173,14 +174,12 @@ def _load_curves_emereac():
     """
     curvas = {}
 
-    # 1977–1998
     xls1 = pd.ExcelFile(BASE / "emergencia_acumulada_interpolada 1977-1998.xlsx")
     for sh in xls1.sheet_names:
         df = pd.read_excel(xls1, sheet_name=sh)
         year = int(str(sh).split("_")[-1])
         curvas[year] = df[["JD", "EMERAC"]].copy()
 
-    # 2000–2015
     xls2 = pd.ExcelFile(BASE / "emergencia_2000_2015_interpolada.xlsx")
     for sh in xls2.sheet_names:
         df = pd.read_excel(xls2, sheet_name=sh)
@@ -377,7 +376,7 @@ class PracticalANNModel:
         self.input_max = np.array([300, 41, 25.5, 84])
 
     def normalize(self, X):
-        return 2*(X - self.input_min)/(self.input_max - self.input_min)-1
+        return 2 * (X - self.input_min) / (self.input_max - self.input_min) - 1
 
     def predict(self, Xreal):
         Xn = self.normalize(Xreal)
@@ -387,17 +386,17 @@ class PracticalANNModel:
             a1 = np.tanh(z1)
             z2 = self.LW @ a1 + self.bLW
             emer.append(np.tanh(z2))
-        emer = (np.array(emer) + 1)/2
+        emer = (np.array(emer) + 1) / 2
         emerac = np.cumsum(emer)
         emerrel = np.diff(emerac, prepend=0)
         return emerrel, emerac
 
 @st.cache_resource
 def load_ann():
-    IW  = np.load(BASE/"IW.npy")
-    bIW = np.load(BASE/"bias_IW.npy")
-    LW  = np.load(BASE/"LW.npy")
-    bLW = np.load(BASE/"bias_out.npy")
+    IW  = np.load(BASE / "IW.npy")
+    bIW = np.load(BASE / "bias_IW.npy")
+    LW  = np.load(BASE / "LW.npy")
+    bLW = np.load(BASE / "bias_out.npy")
     return PracticalANNModel(IW, bIW, LW, bLW)
 
 def postprocess_emergence(emerrel_raw, smooth=True, window=3, clip_zero=True):
@@ -407,7 +406,7 @@ def postprocess_emergence(emerrel_raw, smooth=True, window=3, clip_zero=True):
     if smooth and len(emer) > 1 and window > 1:
         window = int(window)
         window = max(1, min(window, len(emer)))
-        kernel = np.ones(window)/window
+        kernel = np.ones(window) / window
         emer = np.convolve(emer, kernel, mode="same")
     emerac = np.cumsum(emer)
     return emer, emerac
@@ -520,7 +519,7 @@ if uploaded is not None:
                 st.pyplot(fig_ac)
 
             # ===========================================================
-            # 🔵 COMPARACIÓN PREDICHA VS OBSERVADA
+            # 🔵 COMPARACIÓN PREDICHA VS OBSERVADA — SIEMPRE MUESTRA ALGO
             # ===========================================================
             st.subheader("📊 Emergencia acumulada — Predicha vs Observada")
 
@@ -529,104 +528,92 @@ if uploaded is not None:
                 key="obs", type=["csv", "xlsx"]
             )
 
-            if archivo_obs is not None:
-                if archivo_obs.name.endswith(".csv"):
-                    df_obs = pd.read_csv(archivo_obs)
-                else:
-                    df_obs = pd.read_excel(archivo_obs)
+            emerac_obs_interp = None
 
-                col_jd = None
-                for k in ["jd", "julian", "dia"]:
-                    for c in df_obs.columns:
-                        if k in c.lower():
-                            col_jd = c
-                            break
-                    if col_jd:
-                        break
-
-                col_emerac = None
-                col_emerrel = None
-                for c in df_obs.columns:
-                    cl = c.lower()
-                    if "emerac" in cl:
-                        col_emerac = c
-                    if "emerrel" in cl:
-                        col_emerrel = c
-
-                if col_jd is None or (col_emerac is None and col_emerrel is None):
-                    st.error("No se detectaron columnas JD y EMERAC/EMERREL en la curva observada.")
-                else:
-                    jd_obs = pd.to_numeric(df_obs[col_jd], errors="coerce")
-                    mask_val = ~jd_obs.isna()
-                    jd_obs = jd_obs[mask_val]
-
-                    if col_emerac is not None:
-                        emerac_obs = pd.to_numeric(df_obs[col_emerac], errors="coerce")[mask_val]
+            if archivo_obs is None:
+                st.info("📁 Aún no cargaste una curva observada.")
+            else:
+                try:
+                    if archivo_obs.name.endswith(".csv"):
+                        df_obs = pd.read_csv(archivo_obs)
                     else:
-                        emerrel_obs = pd.to_numeric(df_obs[col_emerrel], errors="coerce")[mask_val]
-                        emerac_obs = np.cumsum(np.maximum(emerrel_obs, 0))
+                        df_obs = pd.read_excel(archivo_obs)
 
-                    jd_model = np.array(dias, float)
-                    emerac_pred = np.array(emerac, float)
+                    col_jd = None
+                    for k in ["jd", "julian", "dia"]:
+                        for c in df_obs.columns:
+                            if k in c.lower():
+                                col_jd = c
+                                break
+                        if col_jd:
+                            break
 
-                    try:
+                    col_emerac  = next((c for c in df_obs.columns if "emerac"  in c.lower()), None)
+                    col_emerrel = next((c for c in df_obs.columns if "emerrel" in c.lower()), None)
+
+                    if col_jd is None:
+                        st.error("❌ No se detectó columna JD en la curva observada.")
+                    elif col_emerac is None and col_emerrel is None:
+                        st.error("❌ No se detectó EMERAC ni EMERREL en la curva observada.")
+                    else:
+                        jd_obs = pd.to_numeric(df_obs[col_jd], errors="coerce")
+                        mask = jd_obs.notna()
+                        jd_obs = jd_obs[mask]
+
+                        if col_emerac:
+                            emerac_obs = pd.to_numeric(df_obs[col_emerac], errors="coerce")[mask]
+                        else:
+                            emerrel_obs = pd.to_numeric(df_obs[col_emerrel], errors="coerce")[mask]
+                            emerac_obs = np.cumsum(np.maximum(emerrel_obs, 0))
+
+                        jd_model = np.array(dias, float)
+                        emerac_pred = np.array(emerac, float)
+
                         emerac_obs_interp = np.interp(jd_model, jd_obs, emerac_obs)
-                    except Exception as e:
-                        st.error(f"No se pudo interpolar la curva observada al eje del modelo: {e}")
-                        emerac_obs_interp = None
 
-                    if emerac_obs_interp is not None and np.isfinite(emerac_obs_interp).any():
-                        fig_cmp = plot_emergencia_acumulada(jd_model, emerac_pred, emerac_obs_interp)
-                        st.pyplot(fig_cmp)
-
-                        if emerac_pred.max() > 0:
-                            y_pred_norm = emerac_pred / emerac_pred.max()
+                        if not np.isfinite(emerac_obs_interp).any():
+                            st.error("❌ La curva observada interpolada contiene solo NaN.")
                         else:
-                            y_pred_norm = emerac_pred
+                            fig_cmp = plot_emergencia_acumulada(jd_model, emerac_pred, emerac_obs_interp)
+                            st.pyplot(fig_cmp)
 
-                        if emerac_obs_interp.max() > 0:
-                            y_obs_norm = emerac_obs_interp / emerac_obs_interp.max()
-                        else:
-                            y_obs_norm = emerac_obs_interp
-
-                        rmse_norm = rmse_curvas(y_pred_norm, y_obs_norm)
-                        rmse_raw = rmse_curvas(emerac_pred, emerac_obs_interp)
-
-                        st.markdown("### 📐 RMSE entre curvas")
-                        st.write(f"- **RMSE normalizado (0–1):** `{rmse_norm:.5f}`")
-                        st.write(f"- **RMSE crudo:** `{rmse_raw:.5f}`  (si ambas curvas están en escala comparable)")
-
-                        st.subheader("📈 Curvas comparativas — ANN vs Observada")
-                        fig_super = plot_comparativo_curvas(
-                            dias,
-                            emerac,
-                            emerac_obs_interp,
-                            nombre_obs="Curva observada"
-                        )
-                        st.pyplot(fig_super)
-
-                        # Comparativo visual SOLO si todo es válido
-                        perc_pred = _compute_jd_percentiles(dias, emerac)
-                        perc_obs  = _compute_jd_percentiles(dias, emerac_obs_interp)
-
-                        if perc_pred is not None and perc_obs is not None:
-                            st.subheader("🎨 Comparativo visual ANN vs Observada")
-                            fig_visual = plot_comparativo_visual(
-                                dias,
-                                emerac,
-                                emerac_obs_interp,
-                                perc_pred=perc_pred,
-                                perc_obs=perc_obs,
+                            fig_super = plot_comparativo_curvas(
+                                jd_model, emerac_pred, emerac_obs_interp,
                                 nombre_obs="Curva observada"
                             )
-                            st.pyplot(fig_visual)
-                        else:
-                            st.info("No se pudieron calcular percentiles válidos en ambas curvas; "
-                                    "no se muestra el comparativo visual detallado.")
-                    else:
-                        st.error("La curva observada interpolada no es válida (NaN o vacía).")
+                            st.pyplot(fig_super)
 
-            # ---------- Percentiles ANN ----------
+                            y_pred_norm = emerac_pred / emerac_pred.max() if emerac_pred.max() > 0 else emerac_pred
+                            y_obs_norm  = emerac_obs_interp / emerac_obs_interp.max() if emerac_obs_interp.max() > 0 else emerac_obs_interp
+
+                            rmse_norm = rmse_curvas(y_pred_norm, y_obs_norm)
+                            rmse_raw  = rmse_curvas(emerac_pred, emerac_obs_interp)
+
+                            st.markdown("### 📐 RMSE entre curvas")
+                            st.write(f"- **RMSE normalizado:** `{rmse_norm:.6f}`")
+                            st.write(f"- **RMSE crudo:** `{rmse_raw:.6f}`")
+
+                            perc_pred = _compute_jd_percentiles(jd_model, emerac_pred)
+                            perc_obs  = _compute_jd_percentiles(jd_model, emerac_obs_interp)
+
+                            if perc_pred is None or perc_obs is None:
+                                st.warning("⚠ No se pueden calcular percentiles → no se muestra el gráfico visual.")
+                            else:
+                                fig_visual = plot_comparativo_visual(
+                                    jd_model,
+                                    emerac_pred,
+                                    emerac_obs_interp,
+                                    perc_pred=perc_pred,
+                                    perc_obs=perc_obs,
+                                    nombre_obs="Curva observada"
+                                )
+                                st.subheader("🎨 Gráfico comparativo visual (ANN vs Observada)")
+                                st.pyplot(fig_visual)
+
+                except Exception as e:
+                    st.error(f"❌ Error general al procesar la curva observada: {e}")
+
+            # ---------- Percentiles ANN sobre EMERAC ----------
             st.subheader("📌 Percentiles ANN del año (sobre lo emergido)")
             vals = _compute_jd_percentiles(dias, emerac)
             if vals is not None:
@@ -638,7 +625,7 @@ if uploaded is not None:
                     "d95": round(d95, 1),
                 })
 
-                # ---------- Radar vs patrón meteo ----------
+                # ---------- Radar vs patrón meteo predicho ----------
                 st.subheader("🎯 Radar JD25–95: Año ANN vs patrón meteo")
                 try:
                     cent = joblib.load(BASE / "predweem_model_centroides.pkl")
@@ -660,9 +647,85 @@ if uploaded is not None:
                 except Exception as e:
                     st.error(f"No se pudo generar el radar comparativo: {e}")
 
-            # ---------- Certeza diaria del patrón ----------
-            st.subheader("📈 Certeza diaria del patrón (ANN + centroides)")
+                # ===================================================
+                # 🔵 COMPARACIÓN CON PATRÓN MÁS CERCANO (CENTROIDES)
+                # ===================================================
+                st.subheader("📘 Comparación con el patrón más cercano (centroides)")
+                try:
+                    cent = joblib.load(BASE / "predweem_model_centroides.pkl")
+                    C = cent["centroides"]
 
+                    perc_ann = vals  # [d25, d50, d75, d95]
+
+                    dists = {}
+                    for pat in C.index:
+                        v = C.loc[pat][["JD25","JD50","JD75","JD95"]].values
+                        d = np.linalg.norm(perc_ann - v)
+                        dists[pat] = d
+
+                    patron_mas_cercano = min(dists, key=dists.get)
+                    st.markdown(f"### 🌱 Patrón más cercano según centroides: **{patron_mas_cercano}**")
+
+                    curvas_hist = _load_curves_emereac()
+
+                    mejor_anio = None
+                    mejor_dist = 1e12
+                    mejor_curve = None
+
+                    v_cent = C.loc[patron_mas_cercano][["JD25","JD50","JD75","JD95"]].values
+
+                    for anio, dfc in curvas_hist.items():
+                        perc_year = _compute_jd_percentiles(dfc["JD"], dfc["EMERAC"])
+                        if perc_year is None:
+                            continue
+                        d = np.linalg.norm(np.array(perc_year) - v_cent)
+                        if d < mejor_dist:
+                            mejor_dist = d
+                            mejor_anio = anio
+                            mejor_curve = dfc.copy()
+
+                    if mejor_curve is None:
+                        st.warning("No se encontró un año representativo para el patrón más cercano.")
+                    else:
+                        st.markdown(f"### 📌 Año histórico representativo del patrón: **{mejor_anio}**")
+
+                        jd_model = np.array(dias, float)
+                        emerac_model = np.array(emerac, float)
+
+                        emerac_hist_interp = np.interp(jd_model,
+                                                       mejor_curve["JD"],
+                                                       mejor_curve["EMERAC"])
+
+                        fig_comp_pat, ax_comp = plt.subplots(figsize=(12, 6))
+
+                        ann_norm  = emerac_model / np.nanmax(emerac_model) if np.nanmax(emerac_model) > 0 else emerac_model
+                        hist_norm = emerac_hist_interp / np.nanmax(emerac_hist_interp) if np.nanmax(emerac_hist_interp) > 0 else emerac_hist_interp
+
+                        ax_comp.plot(jd_model, ann_norm,  color="blue", linewidth=3, label="Predicha (ANN)")
+                        ax_comp.plot(jd_model, hist_norm, color="red",  linewidth=2, linestyle="--",
+                                     label=f"Año representativo ({mejor_anio})")
+
+                        cent_vals = C.loc[patron_mas_cercano][["JD25","JD50","JD75","JD95"]].values
+                        for p in cent_vals:
+                            ax_comp.axvline(p, color="green", linestyle=":", alpha=0.7)
+
+                        ax_comp.set_title("Comparación ANN vs Patrón más cercano vs Año representativo")
+                        ax_comp.set_xlabel("Día Juliano")
+                        ax_comp.set_ylabel("Emergencia acumulada normalizada (0–1)")
+                        ax_comp.grid(alpha=0.3)
+                        ax_comp.legend()
+
+                        st.pyplot(fig_comp_pat)
+
+                        rmse_hist = rmse_curvas(ann_norm, hist_norm)
+                        st.markdown("### 📐 RMSE ANN ↔ Año representativo")
+                        st.write(f"RMSE (normalizado): `{rmse_hist:.5f}`")
+
+                except Exception as e:
+                    st.error(f"⚠ No se pudo realizar la comparación con el patrón más cercano: {e}")
+
+            # ---------- 4) Certeza diaria del patrón (ANN + centroides) ----------
+            st.subheader("📈 Certeza diaria del patrón (ANN + centroides)")
             try:
                 cent = joblib.load(BASE / "predweem_model_centroides.pkl")
                 C = cent["centroides"]
@@ -821,7 +884,7 @@ if uploaded is not None:
             except Exception as e:
                 st.error(f"No se pudo calcular la certeza diaria del patrón (ANN+centroides): {e}")
 
-            # ---------- Descarga serie ANN ----------
+            # ---------- 5) Descarga de serie ANN ----------
             csv_ann = df_ann.to_csv(index=False).encode("utf-8")
             st.download_button(
                 "📥 Descargar EMERREL/EMERAC simulada",
@@ -829,10 +892,5 @@ if uploaded is not None:
                 "emergencia_simulada_ANN.csv",
                 mime="text/csv"
             )
-
-
-
-
-
 
 
