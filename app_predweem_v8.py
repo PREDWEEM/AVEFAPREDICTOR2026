@@ -4,6 +4,7 @@
 # - ANN → EMERREL diaria + EMERAC acumulada
 # - Percentiles d25–d95 (curva ANN) + Radar año vs patrón
 # - Certeza diaria del patrón (probabilidad día a día)
+# - Comparación con curva observada + RMSE
 # - Compatible con meteo_daily.csv (Julian_days, TMAX, TMIN, Prec)
 # ===============================================================
 
@@ -37,7 +38,7 @@ st.subheader("Clasificación meteorológica + Emergencia simulada por ANN")
 BASE = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 
 # ===============================================================
-# 🔧 FUNCIONES SEGURAS
+# 🔧 FUNCIONES AUXILIARES
 # ===============================================================
 def safe(fn, msg):
     try:
@@ -45,6 +46,45 @@ def safe(fn, msg):
     except Exception as e:
         st.error(f"{msg}: {e}")
         return None
+
+# ---------------------------------------------------------
+# 📐 RMSE ENTRE DOS CURVAS
+# ---------------------------------------------------------
+def rmse_curvas(y_pred, y_obs):
+    y_pred = np.asarray(y_pred, float)
+    y_obs  = np.asarray(y_obs, float)
+    return float(np.sqrt(np.mean((y_pred - y_obs)**2)))
+
+# ---------------------------------------------------------
+# 📈 GRÁFICO EMERGENCIA ACUMULADA (PREDICHA VS OBSERVADA)
+# ---------------------------------------------------------
+def plot_emergencia_acumulada(dias, emerac_pred, emerac_obs, nombre_obs="Observada"):
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    # Normalizar para comparar forma relativa
+    emerac_pred = np.asarray(emerac_pred, float)
+    emerac_obs  = np.asarray(emerac_obs, float)
+
+    if emerac_pred.max() > 0:
+        y_pred = emerac_pred / emerac_pred.max()
+    else:
+        y_pred = emerac_pred
+
+    if emerac_obs.max() > 0:
+        y_obs = emerac_obs / emerac_obs.max()
+    else:
+        y_obs = emerac_obs
+
+    ax.plot(dias, y_pred, label="Predicha (ANN)", color="blue", linewidth=3)
+    ax.plot(dias, y_obs, label=nombre_obs, color="red", linestyle="--", linewidth=2)
+
+    ax.set_xlabel("Día Juliano")
+    ax.set_ylabel("Emergencia acumulada (0–1)")
+    ax.set_title("Emergencia acumulada — Predicha vs Observada")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    return fig
 
 # ===============================================================
 # 🔵 1. CURVAS DE EMERAC HISTÓRICAS 1977–2015 → JD25–95 + PATRÓN
@@ -65,7 +105,6 @@ def _compute_jd_percentiles(jd, emerac, qs=(0.25, 0.5, 0.75, 0.95)):
     for q in qs:
         out.append(float(np.interp(q, y, jd)))
     return np.array(out, dtype=float)
-
 
 def _load_curves_emereac():
     """
@@ -91,7 +130,6 @@ def _load_curves_emereac():
         curvas[year] = df[["JD", "EMERAC"]].copy()
 
     return curvas
-
 
 def _assign_labels_from_centroids(curvas):
     """
@@ -280,6 +318,7 @@ class PracticalANNModel:
         self.bIW = bIW
         self.LW = LW
         self.bLW = bLW
+        # Rango de normalización de entradas [JD, TMAX, TMIN, Prec]
         self.input_min = np.array([1, 0, -7, 0])
         self.input_max = np.array([300, 41, 25.5, 84])
 
@@ -326,7 +365,7 @@ def radar_multiseries(values_dict, labels, title):
     angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False)
     angles = np.concatenate((angles, [angles[0]]))
 
-    fig = plt.figure(figsize=(6,6))
+    fig = plt.figure(figsize=(6, 6))
     ax = fig.add_subplot(111, polar=True)
 
     for name, vals in values_dict.items():
@@ -408,7 +447,7 @@ if uploaded is not None:
             col_er, col_ac = st.columns(2)
 
             with col_er:
-                fig_er, ax_er = plt.subplots(figsize=(5,4))
+                fig_er, ax_er = plt.subplots(figsize=(5, 4))
                 ax_er.plot(dias, emerrel_raw, label="EMERREL cruda (ANN)", color="red", alpha=0.6)
                 ax_er.plot(dias, emerrel,     label="EMERREL procesada",   color="blue", linewidth=2)
                 ax_er.set_xlabel("Día juliano")
@@ -418,7 +457,7 @@ if uploaded is not None:
                 st.pyplot(fig_er)
 
             with col_ac:
-                fig_ac, ax_ac = plt.subplots(figsize=(5,4))
+                fig_ac, ax_ac = plt.subplots(figsize=(5, 4))
                 if emerac_raw[-1] > 0:
                     ax_ac.plot(dias, emerac_raw/emerac_raw[-1], label="EMERAC cruda (norm.)", color="orange", alpha=0.6)
                 else:
@@ -432,6 +471,86 @@ if uploaded is not None:
                 ax_ac.set_title("EMERAC: ANN vs post-proceso")
                 ax_ac.legend()
                 st.pyplot(fig_ac)
+
+            # ===============================================================
+            # 🔵  COMPARACIÓN EMERGENCIA ACUMULADA — PREDICHA VS OBSERVADA
+            # ===============================================================
+            st.subheader("📊 Emergencia acumulada — Predicha vs Observada")
+
+            archivo_obs = st.file_uploader(
+                "Cargar curva observada (JD + EMERAC o JD + EMERREL):",
+                key="obs", type=["csv", "xlsx"]
+            )
+
+            emerac_obs_interp = None  # por si no se carga nada
+            if archivo_obs is not None:
+                # Leer curva observada
+                if archivo_obs.name.endswith(".csv"):
+                    df_obs = pd.read_csv(archivo_obs)
+                else:
+                    df_obs = pd.read_excel(archivo_obs)
+
+                cols_lower = {c.lower(): c for c in df_obs.columns}
+
+                # Detectar JD
+                col_jd = None
+                for k in ["jd", "julian", "dia"]:
+                    for c in df_obs.columns:
+                        if k in c.lower():
+                            col_jd = c
+                            break
+                    if col_jd:
+                        break
+
+                col_emerac = None
+                col_emerrel = None
+                for c in df_obs.columns:
+                    if "emerac" in c.lower():
+                        col_emerac = c
+                    if "emerrel" in c.lower():
+                        col_emerrel = c
+
+                if col_jd is None or (col_emerac is None and col_emerrel is None):
+                    st.error("No se detectaron columnas JD y EMERAC/EMERREL en la curva observada.")
+                else:
+                    # Extraer JD + curva observada
+                    jd_obs = pd.to_numeric(df_obs[col_jd], errors="coerce")
+                    mask_val = ~jd_obs.isna()
+                    jd_obs = jd_obs[mask_val]
+
+                    if col_emerac is not None:
+                        emerac_obs = pd.to_numeric(df_obs[col_emerac], errors="coerce")[mask_val]
+                    else:
+                        emerrel_obs = pd.to_numeric(df_obs[col_emerrel], errors="coerce")[mask_val]
+                        emerac_obs = np.cumsum(np.maximum(emerrel_obs, 0))
+
+                    # Igualar rango temporal al ANN
+                    jd_model = np.array(dias, float)
+                    emerac_pred = np.array(emerac, float)
+
+                    # Interpolar observada al eje JD del modelo
+                    emerac_obs_interp = np.interp(jd_model, jd_obs, emerac_obs)
+
+                    fig_cmp = plot_emergencia_acumulada(jd_model, emerac_pred, emerac_obs_interp)
+                    st.pyplot(fig_cmp)
+
+                    # ---- RMSE entre curvas ----
+                    if emerac_pred.max() > 0:
+                        y_pred_norm = emerac_pred / emerac_pred.max()
+                    else:
+                        y_pred_norm = emerac_pred
+
+                    if emerac_obs_interp.max() > 0:
+                        y_obs_norm = emerac_obs_interp / emerac_obs_interp.max()
+                    else:
+                        y_obs_norm = emerac_obs_interp
+
+                    rmse_norm = rmse_curvas(y_pred_norm, y_obs_norm)
+                    rmse_raw = rmse_curvas(emerac_pred, emerac_obs_interp)
+
+                    st.markdown("### 📐 RMSE entre curvas")
+                    st.write(f"- **RMSE normalizado (0–1):** `{rmse_norm:.5f}`")
+                    st.write(f"- **RMSE crudo:** `{rmse_raw:.5f}`  (si ambas curvas están en escala comparable)")
 
             # ---------- 2) Percentiles ANN sobre EMERAC ----------
             st.subheader("📌 Percentiles ANN del año (sobre lo emergido)")
@@ -548,7 +667,7 @@ if uploaded is not None:
                             fecha_max = fechas_eval[idx_max]
 
                         # ----- Gráfico -----
-                        figp, axp = plt.subplots(figsize=(9,5))
+                        figp, axp = plt.subplots(figsize=(9, 5))
 
                         # Eje X por fecha si se puede, si no por JD
                         if fecha_col is not None and any(f is not None for f in fechas_eval):
@@ -645,5 +764,20 @@ if uploaded is not None:
                 "emergencia_simulada_ANN.csv",
                 mime="text/csv"
             )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
