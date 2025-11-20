@@ -840,8 +840,30 @@ if uploaded is not None:
                 return fig
 
 
-
-
+                # ===============================================================
+                # 🎨 GRAFICO COMPARATIVO VISUAL PROFESIONAL
+                # ===============================================================
+                if emerac_obs_interp is not None:
+                
+                    # Percentiles de ambas curvas
+                    perc_pred = _compute_jd_percentiles(dias, emerac)
+                    perc_obs  = _compute_jd_percentiles(dias, emerac_obs_interp)
+                
+                    fig_visual = plot_comparativo_visual(
+                        dias,
+                        emerac,              # curva predicha
+                        emerac_obs_interp,   # curva observada
+                        perc_pred=perc_pred,
+                        perc_obs=perc_obs,
+                        nombre_obs="Curva observada"
+                    )
+                
+                    st.subheader("🎨 Comparativo visual ANN vs Observada")
+                    st.pyplot(fig_visual)
+                else:
+                    st.info("Cargue una curva observada para ver el comparativo visual.")
+                
+                
 
 
 
