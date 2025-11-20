@@ -1,11 +1,11 @@
 # ===============================================================
-# 🌾 PREDWEEM v8 — AVEFA Predictor 2026 (Con ANN + Clasificación)
+# 🌾 PREDWEEM v8.0 — AVEFA Predictor 2026 (Con ANN + Clasificación)
 # - ENTRENAMIENTO INTERNO meteo→patrón usando centroides
 # - ANN → EMERREL diaria + EMERAC acumulada
 # - Percentiles d25–d95 (curva ANN) + Radar año vs patrón
 # - Certeza diaria del patrón (probabilidad día a día)
 # - Comparación con curva observada + RMSE
-# - Gráfico comparativo superpuesto de curvas
+# - Gráfico comparativo superpuesto + comparativo visual profesional
 # - Compatible con meteo_daily.csv (Julian_days, TMAX, TMIN, Prec)
 # ===============================================================
 
@@ -107,6 +107,45 @@ def plot_comparativo_curvas(jd, emerac_pred, emerac_obs, nombre_obs="Observada")
     ax.set_ylabel("Emergencia acumulada (normalizada)")
     ax.set_title("Comparación de curvas — EMERAC predicha vs observada")
     ax.grid(True, alpha=0.25)
+    ax.legend()
+
+    return fig
+
+# ---------------------------------------------------------
+# 🎨 GRÁFICO COMPARATIVO VISUAL (ANN vs Observada)
+# ---------------------------------------------------------
+def plot_comparativo_visual(jd, emerac_pred, emerac_obs, 
+                            perc_pred=None, perc_obs=None, nombre_obs="Observada"):
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    emerac_pred = np.asarray(emerac_pred, float)
+    emerac_obs  = np.asarray(emerac_obs, float)
+
+    # Normalización
+    pred = emerac_pred / emerac_pred.max() if emerac_pred.max() > 0 else emerac_pred
+    obs  = emerac_obs  / emerac_obs.max()  if emerac_obs.max()  > 0 else emerac_obs
+
+    # Curvas
+    ax.plot(jd, pred, color="blue", linewidth=3, label="Predicha (ANN)")
+    ax.plot(jd, obs,  color="red", linestyle="--", linewidth=2, label=nombre_obs)
+
+    # Banda visual de diferencia
+    ax.fill_between(jd, pred, obs, color="gray", alpha=0.25,
+                    label="Diferencia |Pred - Obs|")
+
+    # Percentiles (marcas verticales)
+    if perc_pred is not None:
+        for p, c in zip(perc_pred, ["#0033aa", "#0044dd", "#0055ff", "#0077ff"]):
+            ax.axvline(p, color=c, linestyle="-", alpha=0.7, linewidth=1.8)
+
+    if perc_obs is not None:
+        for p, c in zip(perc_obs, ["#aa0000", "#cc0000", "#ee0000", "#ff2222"]):
+            ax.axvline(p, color=c, linestyle="--", alpha=0.8, linewidth=1.7)
+
+    ax.set_xlabel("Día Juliano")
+    ax.set_ylabel("Emergencia acumulada normalizada (0–1)")
+    ax.set_title("Comparación visual — EMERAC Predicha vs Observada")
+    ax.grid(alpha=0.25)
     ax.legend()
 
     return fig
@@ -507,7 +546,6 @@ if uploaded is not None:
                 key="obs", type=["csv", "xlsx"]
             )
 
-            emerac_obs_interp = None  # por si no se carga nada
             if archivo_obs is not None:
                 # Leer curva observada
                 if archivo_obs.name.endswith(".csv"):
@@ -585,6 +623,22 @@ if uploaded is not None:
                         nombre_obs="Curva observada"
                     )
                     st.pyplot(fig_super)
+
+                    # 🎨 Comparativo visual con banda de error + percentiles
+                    perc_pred = _compute_jd_percentiles(dias, emerac)
+                    perc_obs  = _compute_jd_percentiles(dias, emerac_obs_interp)
+
+                    if perc_pred is not None and perc_obs is not None:
+                        st.subheader("🎨 Comparativo visual ANN vs Observada")
+                        fig_visual = plot_comparativo_visual(
+                            dias,
+                            emerac,              # curva predicha
+                            emerac_obs_interp,   # curva observada
+                            perc_pred=perc_pred,
+                            perc_obs=perc_obs,
+                            nombre_obs="Curva observada"
+                        )
+                        st.pyplot(fig_visual)
 
             # ---------- 2) Percentiles ANN sobre EMERAC ----------
             st.subheader("📌 Percentiles ANN del año (sobre lo emergido)")
@@ -799,72 +853,6 @@ if uploaded is not None:
                 mime="text/csv"
             )
 
-      
-            # ---------------------------------------------------------
-            # 🎨 GRÁFICO COMPARATIVO VISUAL (ANN vs Observada)
-            # ---------------------------------------------------------
-            def plot_comparativo_visual(jd, emerac_pred, emerac_obs, 
-                                        perc_pred=None, perc_obs=None, nombre_obs="Observada"):
-                fig, ax = plt.subplots(figsize=(12, 6))
-            
-                emerac_pred = np.asarray(emerac_pred, float)
-                emerac_obs  = np.asarray(emerac_obs, float)
-            
-                # Normalización
-                pred = emerac_pred / emerac_pred.max() if emerac_pred.max() > 0 else emerac_pred
-                obs  = emerac_obs  / emerac_obs.max()  if emerac_obs.max()  > 0 else emerac_obs
-            
-                # Curvas
-                ax.plot(jd, pred, color="blue", linewidth=3, label="Predicha (ANN)")
-                ax.plot(jd, obs,  color="red", linestyle="--", linewidth=2, label=nombre_obs)
-            
-                # Banda visual de diferencia
-                ax.fill_between(jd, pred, obs, color="gray", alpha=0.25,
-                                label="Diferencia |Pred - Obs|")
-            
-                # Percentiles (marcas verticales)
-                if perc_pred is not None:
-                    for p, c in zip(perc_pred, ["#0033aa", "#0044dd", "#0055ff", "#0077ff"]):
-                        ax.axvline(p, color=c, linestyle="-", alpha=0.7, linewidth=1.8)
-            
-                if perc_obs is not None:
-                    for p, c in zip(perc_obs, ["#aa0000", "#cc0000", "#ee0000", "#ff2222"]):
-                        ax.axvline(p, color=c, linestyle="--", alpha=0.8, linewidth=1.7)
-            
-                ax.set_xlabel("Día Juliano")
-                ax.set_ylabel("Emergencia acumulada normalizada (0–1)")
-                ax.set_title("Comparación visual — EMERAC Predicha vs Observada")
-                ax.grid(alpha=0.25)
-                ax.legend()
-            
-                return fig
-
-                    
-                # ===============================================================
-                # 🎨 GRAFICO COMPARATIVO VISUAL PROFESIONAL
-                # ===============================================================
-                if emerac_obs_interp is not None:
-                
-                    # Percentiles de ambas curvas
-                    perc_pred = _compute_jd_percentiles(dias, emerac)
-                    perc_obs  = _compute_jd_percentiles(dias, emerac_obs_interp)
-                
-                    fig_visual = plot_comparativo_visual(
-                        dias,
-                        emerac,              # curva predicha
-                        emerac_obs_interp,   # curva observada
-                        perc_pred=perc_pred,
-                        perc_obs=perc_obs,
-                        nombre_obs="Curva observada"
-                    )
-                
-                    st.subheader("🎨 Comparativo visual ANN vs Observada")
-                    st.pyplot(fig_visual)
-                
-                else:
-                    st.info("Cargue una curva observada para ver el comparativo visual.")
-                
-                            
 
 
 
