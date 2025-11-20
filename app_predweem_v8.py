@@ -799,6 +799,7 @@ if uploaded is not None:
                 mime="text/csv"
             )
 
+      
             # ---------------------------------------------------------
             # 🎨 GRÁFICO COMPARATIVO VISUAL (ANN vs Observada)
             # ---------------------------------------------------------
@@ -818,7 +819,6 @@ if uploaded is not None:
                 ax.plot(jd, obs,  color="red", linestyle="--", linewidth=2, label=nombre_obs)
             
                 # Banda visual de diferencia
-                diff = np.abs(pred - obs)
                 ax.fill_between(jd, pred, obs, color="gray", alpha=0.25,
                                 label="Diferencia |Pred - Obs|")
             
@@ -839,7 +839,7 @@ if uploaded is not None:
             
                 return fig
 
-
+                    
                 # ===============================================================
                 # 🎨 GRAFICO COMPARATIVO VISUAL PROFESIONAL
                 # ===============================================================
@@ -860,11 +860,11 @@ if uploaded is not None:
                 
                     st.subheader("🎨 Comparativo visual ANN vs Observada")
                     st.pyplot(fig_visual)
+                
                 else:
                     st.info("Cargue una curva observada para ver el comparativo visual.")
                 
-                
-
+                            
 
 
 
