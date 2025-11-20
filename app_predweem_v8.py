@@ -797,6 +797,20 @@ def plot_comparativo_curvas(jd, emerac_pred, emerac_obs, nombre_obs="Observada")
 
     return fig
 
+# ===============================================================
+# 🔵  GRÁFICO COMPARATIVO DE CURVAS — PREDICHA VS OBSERVADA
+# ===============================================================
+
+if emerac_obs_interp is not None:
+    fig_comp = plot_comparativo_curvas(
+        dias,             # eje X
+        emerac,           # EMERAC predicha por ANN
+        emerac_obs_interp, # EMERAC observada interpolada
+        nombre_obs="Observada"
+    )
+    st.pyplot(fig_comp)
+else:
+    st.info("Cargue una curva observada para ver la comparación.")
 
 
 
