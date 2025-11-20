@@ -1,15 +1,16 @@
 # ===============================================================
-# 🌾 PREDWEEM v8 — AVEFA Predictor 2026 (CORREGIDO Y ROBUSTO)
-# Clasificación meteorológica (Early/Int/Late/Extended)
-# + ANN emergencia diaria/acumulada SIN DISTORSIÓN
-# Compatible con meteo_daily.csv
+# 🌾 PREDWEEM v8 — AVEFA Predictor 2026 (Con ANN + Clasificación)
+# - ENTRENAMIENTO INTERNO meteo→patrón usando centroides
+# - ANN → EMERREL diaria + EMERAC acumulada
+# - Percentiles d25–d95 (curva ANN) + Radar año vs patrón
+# - Compatible con meteo_daily.csv (Julian_days, TMAX, TMIN, Prec)
 # ===============================================================
 
 import streamlit as st
 import numpy as np
 import pandas as pd
-import joblib
 import matplotlib.pyplot as plt
+import joblib
 from pathlib import Path
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import GradientBoostingClassifier
@@ -30,7 +31,7 @@ header [data-testid="stToolbar"] {visibility: hidden;}
 """, unsafe_allow_html=True)
 
 st.title("🌾 PREDWEEM v8 — AVEFA Predictor 2026")
-st.subheader("Clasificación meteorológica + Emergencia ANN (sin distorsión)")
+st.subheader("Clasificación meteorológica + Emergencia simulada por ANN")
 
 BASE = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 
@@ -44,144 +45,210 @@ def safe(fn, msg):
         st.error(f"{msg}: {e}")
         return None
 
-
 # ===============================================================
-# 🔵 1. DETECTOR ROBUSTO DE COLUMNAS
+# 🔵 1. CURVAS DE EMERAC HISTÓRICAS 1977–2015 → JD25–95 + PATRÓN
 # ===============================================================
-def _detect_meteo_columns(df):
+def _compute_jd_percentiles(jd, emerac, qs=(0.25, 0.5, 0.75, 0.95)):
+    jd = np.asarray(jd, float)
+    emer = np.asarray(emerac, float)
 
-    posibles_jd = ["Julian_days", "julian_days", "julian", "jd", "doy", "dayofyear", "dia"]
-    posibles_tmin = ["tmin", "temperatura_minima", "temp_min", "t_min", "minima"]
-    posibles_tmax = ["tmax", "temperatura_maxima", "temp_max", "t_max", "maxima"]
-    posibles_prec = [
-        "prec", "lluvia", "ppt", "prcp", "rain",
-        "precipitacion", "precipitacion_pluviometrica", "pp", "pmm"
-    ]
-    posibles_fecha = ["fecha", "date"]
+    # Ordenar por JD
+    order = np.argsort(jd)
+    jd = jd[order]
+    emer = emer[order]
 
-    def match(lista):
-        for target in lista:
-            for col in df.columns:
-                if target.lower() in col.lower():
-                    return col
+    if emer.max() <= 0:
         return None
 
-    # 🔴 PARCHE: si existe Julian_days → usarlo como JD
-    if "Julian_days" in df.columns:
-        c_jd = "Julian_days"
-    else:
-        c_jd = match(posibles_jd)
+    y = emer / emer.max()
+    out = []
+    for q in qs:
+        out.append(float(np.interp(q, y, jd)))
+    return np.array(out, dtype=float)
 
-    c_tmin = match(posibles_tmin)
-    c_tmax = match(posibles_tmax)
-    c_prec = match(posibles_prec)
-    c_fecha = match(posibles_fecha)
 
-    return c_jd, c_tmin, c_tmax, c_prec, c_fecha
+def _load_curves_emereac():
+    """
+    Lee curvas de emergencia acumulada histórica desde:
+    - emergencia_acumulada_interpolada 1977-1998.xlsx
+    - emergencia_2000_2015_interpolada.xlsx
+    Devuelve dict: year -> DataFrame[JD, EMERAC]
+    """
+    curvas = {}
 
+    # 1977–1998
+    xls1 = pd.ExcelFile(BASE / "emergencia_acumulada_interpolada 1977-1998.xlsx")
+    for sh in xls1.sheet_names:
+        df = pd.read_excel(xls1, sheet_name=sh)
+        year = int(str(sh).split("_")[-1])
+        curvas[year] = df[["JD", "EMERAC"]].copy()
+
+    # 2000–2015
+    xls2 = pd.ExcelFile(BASE / "emergencia_2000_2015_interpolada.xlsx")
+    for sh in xls2.sheet_names:
+        df = pd.read_excel(xls2, sheet_name=sh)
+        year = int(str(sh).split("_")[-1])
+        curvas[year] = df[["JD", "EMERAC"]].copy()
+
+    return curvas
+
+
+def _assign_labels_from_centroids(curvas):
+    """
+    Usa predweem_model_centroides.pkl para asignar patrón a cada año histórico
+    en base a (JD25, JD50, JD75, JD95) de EMERAC.
+    """
+    cent = joblib.load(BASE / "predweem_model_centroides.pkl")
+    C = cent["centroides"]   # DataFrame: index=patrones, cols=[JD25, JD50, JD75, JD95]
+
+    registros = []
+    for year, df in sorted(curvas.items()):
+        vals = _compute_jd_percentiles(df["JD"], df["EMERAC"])
+        if vals is None:
+            continue
+        d25, d50, d75, d95 = vals
+        v = np.array([d25, d50, d75, d95])
+
+        dists = ((C.values - v)**2).sum(axis=1)**0.5
+        patron = C.index[np.argmin(dists)]
+
+        registros.append({
+            "anio": int(year),
+            "patron": str(patron),
+            "JD25": d25,
+            "JD50": d50,
+            "JD75": d75,
+            "JD95": d95
+        })
+
+    return pd.DataFrame(registros)
 
 # ===============================================================
-# 🔵 2. FEATURES PARA CLASIFICACIÓN METEO
+# 🔵 2. FEATURES METEOROLÓGICOS HISTÓRICOS (Bordenave 1977–2015)
 # ===============================================================
-def _build_features_from_df_meteo(df):
+def _build_meteo_features_for_years(labels_df):
+    """
+    A partir de las etiquetas (anio, patrón) y el archivo
+    Bordenave_1977_2015_por_anio_con_JD.xlsx, construye
+    un DataFrame con features meteorológicas y columna 'patron'.
+    """
+    xls = pd.ExcelFile(BASE / "Bordenave_1977_2015_por_anio_con_JD.xlsx")
+    rows = []
 
-    df2 = df.copy()
-    c_jd, c_tmin, c_tmax, c_prec, c_fecha = _detect_meteo_columns(df2)
+    for _, row in labels_df.iterrows():
+        year = int(row["anio"])
+        patron = row["patron"]
 
-    # Si no hay JD pero sí fecha → derivarlo
-    if c_jd is None and c_fecha is not None:
-        df2[c_fecha] = pd.to_datetime(df2[c_fecha], errors="coerce")
-        df2["JD"] = df2[c_fecha].dt.dayofyear
-        c_jd = "JD"
+        if str(year) not in xls.sheet_names:
+            continue
 
-    df2[c_jd] = pd.to_numeric(df2[c_jd], errors="coerce")
-    df2[c_tmin] = pd.to_numeric(df2[c_tmin], errors="coerce")
-    df2[c_tmax] = pd.to_numeric(df2[c_tmax], errors="coerce")
-    df2[c_prec] = pd.to_numeric(df2[c_prec], errors="coerce")
+        df = pd.read_excel(xls, sheet_name=str(year)).copy()
 
-    df2 = df2.dropna(subset=[c_jd])
+        # Normalizar nombres
+        df.rename(columns={
+            "Temperatura_Minima": "TMIN",
+            "Temperatura_Maxima": "TMAX",
+            "Precipitacion_Pluviometrica": "Prec",
+        }, inplace=True)
 
-    df2["Tmed"] = (df2[c_tmin] + df2[c_tmax]) / 2
+        # Asegurar tipos numéricos
+        df["JD"] = pd.to_numeric(df["JD"], errors="coerce")
+        df["TMIN"] = pd.to_numeric(df.get("TMIN"), errors="coerce")
+        df["TMAX"] = pd.to_numeric(df.get("TMAX"), errors="coerce")
+        df["Prec"] = pd.to_numeric(df.get("Prec"), errors="coerce")
+
+        df = df.dropna(subset=["JD"])
+        df["Tmed"] = (df["TMIN"] + df["TMAX"]) / 2
+
+        feats = {
+            "anio": year,
+            "patron": patron,
+            "Tmin_mean": df["TMIN"].mean(),
+            "Tmax_mean": df["TMAX"].mean(),
+            "Tmed_mean": df["Tmed"].mean(),
+            "Prec_total": df["Prec"].sum(),
+            "Prec_days_10mm": (df["Prec"] >= 10).sum(),
+        }
+
+        sub = df[df["JD"] <= 121]
+        feats["Tmed_FM"] = sub["Tmed"].mean()
+        feats["Prec_FM"] = sub["Prec"].sum()
+
+        rows.append(feats)
+
+    return pd.DataFrame(rows)
+
+# ===============================================================
+# 🔵 3. DETECCIÓN ROBUSTA DE COLUMNAS EN ARCHIVOS NUEVOS
+# ===============================================================
+def _build_features_from_df_meteo(df_meteo):
+    df = df_meteo.copy()
+    cols = {c.lower(): c for c in df.columns}
+
+    def pick(*names):
+        for n in names:
+            n_low = n.lower()
+            for col_low, col_orig in cols.items():
+                if n_low in col_low:
+                    return col_orig
+        return None
+
+    # JD: priorizar Julian_days
+    c_jd = None
+    for col in df.columns:
+        if col.lower() == "julian_days":
+            c_jd = col
+            break
+    if c_jd is None:
+        c_jd = pick("jd", "dia", "julian", "doy")
+
+    c_tmin = pick("tmin", "temperatura_minima")
+    c_tmax = pick("tmax", "temperatura_maxima")
+    c_prec = pick("prec", "lluvia", "ppt", "prcp", "pluviometrica")
+
+    if None in (c_jd, c_tmin, c_tmax, c_prec):
+        raise ValueError("No se identificaron correctamente JD/TMIN/TMAX/Prec en el archivo cargado.")
+
+    df["JD"]   = pd.to_numeric(df[c_jd], errors="coerce")
+    df["TMIN"] = pd.to_numeric(df[c_tmin], errors="coerce")
+    df["TMAX"] = pd.to_numeric(df[c_tmax], errors="coerce")
+    df["Prec"] = pd.to_numeric(df[c_prec], errors="coerce")
+
+    df = df.dropna(subset=["JD"])
+    df["Tmed"] = (df["TMIN"] + df["TMAX"]) / 2
 
     feats = {
-        "Tmin_mean": df2[c_tmin].mean(),
-        "Tmax_mean": df2[c_tmax].mean(),
-        "Tmed_mean": df2["Tmed"].mean(),
-        "Prec_total": df2[c_prec].sum(),
-        "Prec_days_10mm": (df2[c_prec] >= 10).sum()
+        "Tmin_mean": df["TMIN"].mean(),
+        "Tmax_mean": df["TMAX"].mean(),
+        "Tmed_mean": df["Tmed"].mean(),
+        "Prec_total": df["Prec"].sum(),
+        "Prec_days_10mm": (df["Prec"] >= 10).sum(),
     }
 
-    sub = df2[df2[c_jd] <= 121]
+    sub = df[df["JD"] <= 121]
     feats["Tmed_FM"] = sub["Tmed"].mean()
-    feats["Prec_FM"] = sub[c_prec].sum()
+    feats["Prec_FM"] = sub["Prec"].sum()
 
-    return pd.DataFrame([feats])
-
+    return pd.DataFrame([feats]), df  # devuelvo también df limpio para ANN
 
 # ===============================================================
-# 🔵 3. ENTRENAMIENTO INTERNO DEL CLASIFICADOR METEO (CORREGIDO)
+# 🔵 4. ENTRENAMIENTO INTERNO CLASIFICADOR METEO → PATRÓN
 # ===============================================================
 @st.cache_resource
 def load_clf():
+    # 1) Curvas históricas → JD25–95 → patrón
+    curvas = _load_curves_emereac()
+    labels_df = _assign_labels_from_centroids(curvas)
 
-    # CENTROIDES reales existentes
-    cent = joblib.load(BASE / "predweem_model_centroides.pkl")
-    C = cent["centroides"]  # DataFrame: index = nombre de patrones
+    # 2) Meteo histórica → features + patrón
+    feat_df = _build_meteo_features_for_years(labels_df).dropna()
 
-    # HISTÓRICO METEOROLÓGICO
-    xls = pd.ExcelFile(BASE / "Bordenave_1977_2015_por_anio_con_JD.xlsx")
-
-    registros = []
-
-    for sheet in xls.sheet_names:
-        dfy = pd.read_excel(xls, sheet)
-
-        c_jd, c_tmin, c_tmax, c_prec, c_fecha = _detect_meteo_columns(dfy)
-        dfy = dfy.dropna(subset=[c_jd])
-
-        dfy["Tmed"] = (dfy[c_tmin] + dfy[c_tmax]) / 2
-
-        # ==========================
-        # CENTROIDES → asignar patrón correcto
-        # ==========================
-        jd = dfy[c_jd].to_numpy()
-        jd_sorted = np.sort(jd)
-
-        # percentiles aproximados (no depende de EMERAC histórica)
-        d25 = jd_sorted[int(0.25 * len(jd_sorted))]
-        d50 = jd_sorted[int(0.50 * len(jd_sorted))]
-        d75 = jd_sorted[int(0.75 * len(jd_sorted))]
-        d95 = jd_sorted[int(0.95 * len(jd_sorted))]
-
-        v = np.array([d25, d50, d75, d95])
-
-        # Asignación real de patrón según el centroide más cercano
-        dist = ((C.values - v)**2).sum(axis=1)**0.5
-        patron = C.index[np.argmin(dist)]
-
-        # ==========================
-        # FEATURES METEO
-        # ==========================
-        feats = {
-            "Tmin_mean": dfy[c_tmin].mean(),
-            "Tmax_mean": dfy[c_tmax].mean(),
-            "Tmed_mean": dfy["Tmed"].mean(),
-            "Prec_total": dfy[c_prec].sum(),
-            "Prec_days_10mm": (dfy[c_prec] >= 10).sum(),
-        }
-
-        sub = dfy[dfy[c_jd] <= 121]
-        feats["Tmed_FM"] = sub["Tmed"].mean()
-        feats["Prec_FM"] = sub[c_prec].sum()
-
-        feats["patron"] = patron
-        registros.append(feats)
-
-    # Dataset final para entrenar
-    feat_df = pd.DataFrame(registros)
-
-    X = feat_df.drop(columns=["patron"])
-    y = feat_df["patron"]
+    X = feat_df[[
+        "Tmin_mean", "Tmax_mean", "Tmed_mean",
+        "Prec_total", "Prec_days_10mm",
+        "Tmed_FM", "Prec_FM"
+    ]]
+    y = feat_df["patron"].astype(str)
 
     clf = Pipeline([
         ("sc", StandardScaler()),
@@ -192,24 +259,18 @@ def load_clf():
         ))
     ])
     clf.fit(X, y)
-
     return clf
 
-
-# ===============================================================
-# 🔵 4. PREDICCIÓN DE PATRÓN METEO
-# ===============================================================
 def predecir_patron(df_meteo):
     model = load_clf()
-    Xnew = _build_features_from_df_meteo(df_meteo)
+    Xnew, df_limpio = _build_features_from_df_meteo(df_meteo)
     proba = model.predict_proba(Xnew)[0]
     clases = model.classes_
     pred = clases[np.argmax(proba)]
-    return pred, dict(zip(clases, proba))
-
+    return str(pred), dict(zip(map(str, clases), map(float, proba))), df_limpio
 
 # ===============================================================
-# 🔵 5. ANN — EMERGENCIA (CORREGIDA)
+# 🔵 5. ANN — PREDICCIÓN DE EMERGENCIA
 # ===============================================================
 class PracticalANNModel:
     def __init__(self, IW, bIW, LW, bLW):
@@ -229,33 +290,191 @@ class PracticalANNModel:
         for x in Xn:
             z1 = self.IW.T @ x + self.bIW
             a1 = np.tanh(z1)
-            z2 = self.LLW @ a1 + self.bLW
+            z2 = self.LW @ a1 + self.bLW
             emer.append(np.tanh(z2))
         emer = (np.array(emer) + 1)/2
         emerac = np.cumsum(emer)
         emerrel = np.diff(emerac, prepend=0)
         return emerrel, emerac
 
-
 @st.cache_resource
 def load_ann():
-    IW = np.load(BASE/"IW.npy")
+    IW  = np.load(BASE/"IW.npy")
     bIW = np.load(BASE/"bias_IW.npy")
-    LW = np.load(BASE/"LW.npy")
+    LW  = np.load(BASE/"LW.npy")
     bLW = np.load(BASE/"bias_out.npy")
     return PracticalANNModel(IW, bIW, LW, bLW)
 
-
-def postprocess_emergence(emerrel_raw, smooth=True, window=3, clip=True):
-    emer = np.array(emerrel_raw)
-    if clip:
-        emer = np.maximum(emer, 0)
-    if smooth and window > 1:
-        k = np.ones(window)/window
-        emer = np.convolve(emer, k, mode="same")
+def postprocess_emergence(emerrel_raw, smooth=True, window=3, clip_zero=True):
+    emer = np.array(emerrel_raw, dtype=float)
+    if clip_zero:
+        emer = np.maximum(emer, 0.0)
+    if smooth and len(emer) > 1 and window > 1:
+        window = int(window)
+        window = max(1, min(window, len(emer)))
+        kernel = np.ones(window)/window
+        emer = np.convolve(emer, kernel, mode="same")
     emerac = np.cumsum(emer)
     return emer, emerac
 
+# ===============================================================
+# 🔵 6. RADAR MULTISERIES JD25–95 (Año ANN vs Patrón)
+# ===============================================================
+def radar_multiseries(values_dict, labels, title):
+    angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False)
+    angles = np.concatenate((angles, [angles[0]]))
+
+    fig = plt.figure(figsize=(6,6))
+    ax = fig.add_subplot(111, polar=True)
+
+    for name, vals in values_dict.items():
+        vals2 = list(vals) + [vals[0]]
+        ax.plot(angles, vals2, lw=2.5, label=name)
+        ax.fill(angles, vals2, alpha=0.15)
+
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(labels)
+    ax.set_title(title, fontsize=14)
+    ax.legend(loc="lower right", bbox_to_anchor=(1.3, 0.1))
+
+    return fig
+
+# ===============================================================
+# 🔵 7. CONTROLES ANN EN SIDEBAR
+# ===============================================================
+with st.sidebar:
+    st.header("Ajustes de emergencia (ANN)")
+    use_smoothing = st.checkbox("Suavizar EMERREL", value=True)
+    window_size   = st.slider("Ventana de suavizado (días)", 1, 9, 3)
+    clip_zero     = st.checkbox("Recortar negativos a 0", value=True)
+
+# ===============================================================
+# 🔵 8. INTERFAZ PRINCIPAL — CARGA DE ARCHIVO
+# ===============================================================
+st.subheader("📤 Subir archivo meteorológico")
+uploaded = st.file_uploader("Cargar archivo (ej. meteo_daily.csv):", type=["csv", "xlsx"])
+
+modelo_ann = safe(load_ann, "Error cargando pesos ANN (IW.npy, bias_IW.npy, LW.npy, bias_out.npy)")
+
+if uploaded is not None:
+    # Leer archivo
+    if uploaded.name.endswith(".csv"):
+        df_raw = pd.read_csv(uploaded)
+    else:
+        df_raw = pd.read_excel(uploaded)
+
+    st.success("Archivo cargado correctamente.")
+    st.dataframe(df_raw, use_container_width=True)
+
+    # Clasificación + limpieza (df_limpio listo para ANN)
+    try:
+        patron_pred, probs, df_meteo = predecir_patron(df_raw)
+    except Exception as e:
+        st.error(f"Error en la clasificación meteorológica: {e}")
+        st.stop()
+
+    st.markdown(f"## 🌱 Patrón meteo→predicho: **{patron_pred}**")
+    st.json(probs)
+
+    # ===========================================================
+    # ANN solo si tenemos modelo y columnas mínimas
+    # ===========================================================
+    if modelo_ann is not None:
+        st.subheader("🔍 Emergencia simulada por ANN (EMERREL / EMERAC)")
+
+        # df_meteo ya está limpio y con columnas JD, TMAX, TMIN, Prec
+        if not all(c in df_meteo.columns for c in ["JD", "TMAX", "TMIN", "Prec"]):
+            st.info("No se identificaron correctamente JD/TMAX/TMIN/Prec para ejecutar la ANN.")
+        else:
+            df_ann = df_meteo.copy()
+            df_ann = df_ann.sort_values("JD")
+            dias = df_ann["JD"].to_numpy()
+
+            X_ann = df_ann[["JD", "TMAX", "TMIN", "Prec"]].to_numpy(float)
+            emerrel_raw, emerac_raw = modelo_ann.predict(X_ann)
+            emerrel, emerac = postprocess_emergence(
+                emerrel_raw,
+                smooth=use_smoothing,
+                window=window_size,
+                clip_zero=clip_zero,
+            )
+
+            df_ann["EMERREL"] = emerrel
+            df_ann["EMERAC"]  = emerac
+
+            col_er, col_ac = st.columns(2)
+
+            with col_er:
+                fig_er, ax_er = plt.subplots(figsize=(5,4))
+                ax_er.plot(dias, emerrel_raw, label="EMERREL cruda (ANN)", color="red", alpha=0.6)
+                ax_er.plot(dias, emerrel,     label="EMERREL procesada",   color="blue", linewidth=2)
+                ax_er.set_xlabel("Día juliano")
+                ax_er.set_ylabel("EMERREL (fracción diaria)")
+                ax_er.set_title("EMERREL: ANN vs post-proceso")
+                ax_er.legend()
+                st.pyplot(fig_er)
+
+            with col_ac:
+                fig_ac, ax_ac = plt.subplots(figsize=(5,4))
+                if emerac_raw[-1] > 0:
+                    ax_ac.plot(dias, emerac_raw/emerac_raw[-1], label="EMERAC cruda (norm.)", color="orange", alpha=0.6)
+                else:
+                    ax_ac.plot(dias, emerac_raw, label="EMERAC cruda", color="orange", alpha=0.6)
+                if emerac[-1] > 0:
+                    ax_ac.plot(dias, emerac/emerac[-1], label="EMERAC procesada (norm.)", color="green", linewidth=2)
+                else:
+                    ax_ac.plot(dias, emerac, label="EMERAC procesada", color="green", linewidth=2)
+                ax_ac.set_xlabel("Día juliano")
+                ax_ac.set_ylabel("EMERAC (0–1 relativo al período)")
+                ax_ac.set_title("EMERAC: ANN vs post-proceso")
+                ax_ac.legend()
+                st.pyplot(fig_ac)
+
+            # Percentiles sobre EMERAC ANN
+            st.subheader("📌 Percentiles ANN del año (sobre lo emergido)")
+            vals = _compute_jd_percentiles(dias, emerac)
+            if vals is not None:
+                d25, d50, d75, d95 = vals
+                st.write({
+                    "d25": round(d25, 1),
+                    "d50": round(d50, 1),
+                    "d75": round(d75, 1),
+                    "d95": round(d95, 1),
+                })
+
+                # Radar vs patrón meteo predicho
+                st.subheader("🎯 Radar JD25–95: Año ANN vs patrón meteo")
+                try:
+                    cent = joblib.load(BASE / "predweem_model_centroides.pkl")
+                    C = cent["centroides"]
+                    if patron_pred in C.index:
+                        vals_year = [d25, d50, d75, d95]
+                        vals_pat  = list(C.loc[patron_pred][["JD25","JD50","JD75","JD95"]].values)
+                        fig_rad = radar_multiseries(
+                            {
+                                "Año evaluado (ANN)": vals_year,
+                                f"Patrón {patron_pred}": vals_pat
+                            },
+                            labels=["d25","d50","d75","d95"],
+                            title="Radar — Año vs patrón"
+                        )
+                        st.pyplot(fig_rad)
+                    else:
+                        st.info("El patrón predicho no se encuentra en los centroides.")
+                except Exception as e:
+                    st.error(f"No se pudo generar el radar comparativo: {e}")
+
+            # Descarga de serie ANN
+            csv_ann = df_ann.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📥 Descargar EMERREL/EMERAC simulada",
+                csv_ann,
+                "emergencia_simulada_ANN.csv",
+                mime="text/csv"
+            )
+
+else:
+    st.info("⬆️ Subí un archivo para comenzar.")
 
 
 
