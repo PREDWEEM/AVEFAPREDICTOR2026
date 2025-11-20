@@ -5,6 +5,7 @@
 # - Percentiles d25–d95 (curva ANN) + Radar año vs patrón
 # - Certeza diaria del patrón (probabilidad día a día)
 # - Comparación con curva observada + RMSE
+# - Gráfico comparativo superpuesto de curvas
 # - Compatible con meteo_daily.csv (Julian_days, TMAX, TMIN, Prec)
 # ===============================================================
 
@@ -82,6 +83,30 @@ def plot_emergencia_acumulada(dias, emerac_pred, emerac_obs, nombre_obs="Observa
     ax.set_ylabel("Emergencia acumulada (0–1)")
     ax.set_title("Emergencia acumulada — Predicha vs Observada")
     ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    return fig
+
+# ---------------------------------------------------------
+# 📈 GRÁFICO COMPARATIVO SUPERPUESTO (CURVAS NORMALIZADAS)
+# ---------------------------------------------------------
+def plot_comparativo_curvas(jd, emerac_pred, emerac_obs, nombre_obs="Observada"):
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    emerac_pred = np.asarray(emerac_pred, float)
+    emerac_obs  = np.asarray(emerac_obs, float)
+
+    # Normalización a 0–1
+    pred_norm = emerac_pred / emerac_pred.max() if emerac_pred.max() > 0 else emerac_pred
+    obs_norm  = emerac_obs  / emerac_obs.max()  if emerac_obs.max()  > 0 else emerac_obs
+
+    ax.plot(jd, pred_norm, color="blue", linewidth=3, label="Predicha (ANN)")
+    ax.plot(jd, obs_norm,  color="red", linestyle="--", linewidth=2, label=nombre_obs)
+
+    ax.set_xlabel("Día Juliano")
+    ax.set_ylabel("Emergencia acumulada (normalizada)")
+    ax.set_title("Comparación de curvas — EMERAC predicha vs observada")
+    ax.grid(True, alpha=0.25)
     ax.legend()
 
     return fig
@@ -490,8 +515,6 @@ if uploaded is not None:
                 else:
                     df_obs = pd.read_excel(archivo_obs)
 
-                cols_lower = {c.lower(): c for c in df_obs.columns}
-
                 # Detectar JD
                 col_jd = None
                 for k in ["jd", "julian", "dia"]:
@@ -531,6 +554,7 @@ if uploaded is not None:
                     # Interpolar observada al eje JD del modelo
                     emerac_obs_interp = np.interp(jd_model, jd_obs, emerac_obs)
 
+                    # Gráfico simple de EMERAC comparada
                     fig_cmp = plot_emergencia_acumulada(jd_model, emerac_pred, emerac_obs_interp)
                     st.pyplot(fig_cmp)
 
@@ -551,6 +575,16 @@ if uploaded is not None:
                     st.markdown("### 📐 RMSE entre curvas")
                     st.write(f"- **RMSE normalizado (0–1):** `{rmse_norm:.5f}`")
                     st.write(f"- **RMSE crudo:** `{rmse_raw:.5f}`  (si ambas curvas están en escala comparable)")
+
+                    # Gráfico comparativo superpuesto (curvas normalizadas)
+                    st.subheader("📈 Curvas comparativas — ANN vs Observada")
+                    fig_super = plot_comparativo_curvas(
+                        dias,
+                        emerac,             # EMERAC predicha procesada
+                        emerac_obs_interp,  # EMERAC observada interpolada
+                        nombre_obs="Curva observada"
+                    )
+                    st.pyplot(fig_super)
 
             # ---------- 2) Percentiles ANN sobre EMERAC ----------
             st.subheader("📌 Percentiles ANN del año (sobre lo emergido)")
@@ -764,13 +798,6 @@ if uploaded is not None:
                 "emergencia_simulada_ANN.csv",
                 mime="text/csv"
             )
-
-
-
-
-
-
-
 
 
 
