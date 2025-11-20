@@ -378,174 +378,179 @@ if uploaded is not None:
     st.markdown(f"## 🌱 Patrón meteo→predicho: **{patron_pred}**")
     st.json(probs)
 
-    # ===========================================================
-    # 📈 CERTEZA DIARIA DEL PATRÓN
-    # ===========================================================
-    st.subheader("📈 Certeza temporal del patrón (día por día)")
+# ===============================================================
+# 📈 CERTEZA DIARIA DEL PATRÓN (ANN + centroides)
+# ===============================================================
+st.subheader("📈 Certeza diaria del patrón (ANN + centroides)")
 
-    try:
-        model = load_clf()
-        clases = model.classes_
-        idx_sel = np.where(clases == patron_pred)[0][0]
+try:
+    # Cargamos centroides
+    cent = joblib.load(BASE / "predweem_model_centroides.pkl")
+    C = cent["centroides"]   # index = patrones, cols = JD25, JD50, JD75, JD95
 
-        dias_eval = []
+    if patron_pred not in C.index:
+        st.warning(f"El patrón predicho (**{patron_pred}**) no se encuentra en los centroides.")
+    else:
+        # Listas para almacenar la probabilidad diaria del patrón seleccionado
+        jd_eval = []
         fechas_eval = []
-        prob_sel = []
+        probs_sel = []
 
-        # Intentar detectar columna Fecha en df_meteo
-        fecha_col = next((c for c in df_meteo.columns if "fecha" in c.lower() or "date" in c.lower()), None)
-        if fecha_col is not None:
-            df_meteo[fecha_col] = pd.to_datetime(df_meteo[fecha_col], errors="coerce")
+        # Intentar usar fechas reales si están disponibles
+        fecha_col = None
+        for c in df_ann.columns:
+            if "fecha" in c.lower() or "date" in c.lower():
+                fecha_col = c
+                break
 
-        jd_unique = np.sort(df_meteo["JD"].unique())
+        # Recorremos día a día, usando la curva ANN truncada hasta cada día
+        # (empezamos en i=4 para evitar ruido extremo al inicio)
+        for i in range(4, len(dias)):
+            jd_sub = dias[:i+1]
+            emerac_sub = emerac[:i+1]
 
-        for jd_max in jd_unique:
-            df_parc = df_meteo[df_meteo["JD"] <= jd_max].copy()
-            if len(df_parc) < 5:
-                # evitar ruido con muy pocos días
+            vals_i = _compute_jd_percentiles(jd_sub, emerac_sub)
+            if vals_i is None:
                 continue
 
-            # Features parciales
-            df_parc["Tmed"] = (df_parc["TMIN"] + df_parc["TMAX"]) / 2
+            v = np.array(vals_i)  # [d25, d50, d75, d95]
 
-            Tmin_mean = df_parc["TMIN"].mean()
-            Tmax_mean = df_parc["TMAX"].mean()
-            Tmed_mean = df_parc["Tmed"].mean()
-            Prec_total = df_parc["Prec"].sum()
-            Prec_days_10mm = (df_parc["Prec"] >= 10).sum()
+            # Distancias a cada centroide en espacio JD25–JD95
+            dists = np.linalg.norm(C.values - v, axis=1)
+            # Evitar división por cero
+            w = 1.0 / (dists + 1e-6)
+            p = w / w.sum()  # "probabilidades" tipo softmax
 
-            sub = df_parc[df_parc["JD"] <= 121]
-            Tmed_FM = sub["Tmed"].mean()
-            Prec_FM = sub["Prec"].sum()
+            # Probabilidad del patrón seleccionado
+            idx_pat = list(C.index).index(patron_pred)
+            p_sel = float(p[idx_pat])
 
-            X_day = pd.DataFrame([{
-                "Tmin_mean": Tmin_mean,
-                "Tmax_mean": Tmax_mean,
-                "Tmed_mean": Tmed_mean,
-                "Prec_total": Prec_total,
-                "Prec_days_10mm": Prec_days_10mm,
-                "Tmed_FM": Tmed_FM,
-                "Prec_FM": Prec_FM
-            }])
+            jd_eval.append(jd_sub[-1])
+            probs_sel.append(p_sel)
 
-            proba_day = model.predict_proba(X_day)[0]
-            p_sel = float(proba_day[idx_sel])
-
-            dias_eval.append(jd_max)
-            prob_sel.append(p_sel)
-
-            if fecha_col is not None:
-                fechas_eval.append(df_parc[fecha_col].max())
+            if fecha_col is not None and fecha_col in df_ann.columns:
+                # Tomamos la última fecha disponible para ese JD
+                subf = df_ann[df_ann["JD"] == jd_sub[-1]]
+                if not subf.empty:
+                    fechas_eval.append(subf[fecha_col].max())
+                else:
+                    fechas_eval.append(None)
             else:
                 fechas_eval.append(None)
 
-        # Cobertura temporal estimada (1-ene → 1-oct ~ JD 1–274)
-        TEMPORADA_MAX = 274
-        JD_START = int(df_meteo["JD"].min())
-        JD_END   = int(df_meteo["JD"].max())
-        cobertura = (JD_END - JD_START + 1) / TEMPORADA_MAX
-
-        # Momento crítico y máxima certeza
-        UMBRAL = 0.8
-        idx_crit = next((i for i, p in enumerate(prob_sel) if p >= UMBRAL), None)
-        idx_max = int(np.argmax(prob_sel)) if len(prob_sel) > 0 else None
-
-        fecha_crit = None
-        prob_crit = None
-        if idx_crit is not None:
-            prob_crit = prob_sel[idx_crit]
-            fecha_crit = fechas_eval[idx_crit]
-
-        fecha_max = None
-        prob_max = None
-        if idx_max is not None:
-            prob_max = prob_sel[idx_max]
-            fecha_max = fechas_eval[idx_max]
-
-        # Gráfico
-        figp, axp = plt.subplots(figsize=(9,5))
-        if fecha_col is not None and all(f is not None for f in fechas_eval):
-            x_axis = fechas_eval
-            axp.set_xlabel("Fecha calendario")
+        if len(jd_eval) == 0:
+            st.info("No se pudo calcular la evolución diaria del patrón (curva ANN demasiado corta).")
         else:
-            x_axis = dias_eval
-            axp.set_xlabel("Día juliano")
+            # Cobertura temporal (similar a v7.2)
+            TEMPORADA_MAX = 274  # ~1-ene → 1-oct
+            JD_START = int(dias.min())
+            JD_END   = int(dias.max())
+            cobertura = (JD_END - JD_START + 1) / TEMPORADA_MAX
 
-        axp.plot(x_axis, prob_sel, label=f"P({patron_pred})", color="green", lw=2)
+            # Momento crítico (primer día con P ≥ 0.8) y máxima certeza
+            UMBRAL = 0.8
+            idx_crit = next((i for i, p in enumerate(probs_sel) if p >= UMBRAL), None)
+            idx_max  = int(np.argmax(probs_sel)) if len(probs_sel) > 0 else None
 
-        if fecha_crit is not None:
-            axp.axvline(x_axis[idx_crit], color="green", linestyle="--", linewidth=2,
-                        label=f"Momento crítico (P≥{UMBRAL:.0%})")
+            fecha_crit = None
+            prob_crit  = None
+            if idx_crit is not None:
+                prob_crit = probs_sel[idx_crit]
+                fecha_crit = fechas_eval[idx_crit]
 
-        if fecha_max is not None and idx_max is not None:
-            axp.axvline(x_axis[idx_max], color="blue", linestyle=":", linewidth=2,
-                        label="Máxima certeza")
+            fecha_max = None
+            prob_max  = None
+            if idx_max is not None:
+                prob_max = probs_sel[idx_max]
+                fecha_max = fechas_eval[idx_max]
 
-        axp.set_ylim(0,1)
-        axp.set_ylabel("Probabilidad del patrón seleccionado")
-        axp.set_title("Evolución diaria de la certeza del patrón")
-        axp.legend()
-        figp.autofmt_xdate()
-        st.pyplot(figp)
+            # ----- Gráfico de probabilidad diaria -----
+            figp, axp = plt.subplots(figsize=(9,5))
 
-        # Resumen textual
-        st.markdown("### 🧠 Momento crítico de definición del patrón")
-        if fecha_crit is not None:
-            if isinstance(fecha_crit, pd.Timestamp):
-                crit_str = fecha_crit.strftime("%d-%b")
+            if fecha_col is not None and any(f is not None for f in fechas_eval):
+                x_axis = [f if f is not None else pd.NaT for f in fechas_eval]
+                axp.set_xlabel("Fecha calendario")
             else:
-                crit_str = f"JD {dias_eval[idx_crit]}"
-            if isinstance(fecha_max, pd.Timestamp):
-                max_str = fecha_max.strftime("%d-%b")
+                x_axis = jd_eval
+                axp.set_xlabel("Día juliano")
+
+            axp.plot(x_axis, probs_sel,
+                     label=f"P({patron_pred}) según ANN+centroides",
+                     color="green", lw=2)
+
+            # Marcar momento crítico y máxima certeza
+            if idx_crit is not None:
+                axp.axvline(x_axis[idx_crit],
+                            color="green", linestyle="--", linewidth=2,
+                            label=f"Momento crítico (P ≥ {UMBRAL:.0%})")
+
+            if idx_max is not None and (idx_crit is None or idx_max != idx_crit):
+                axp.axvline(x_axis[idx_max],
+                            color="blue", linestyle=":", linewidth=2,
+                            label="Máxima certeza")
+
+            axp.set_ylim(0, 1)
+            axp.set_ylabel("Probabilidad del patrón seleccionado")
+            axp.set_title("Evolución diaria de la certeza del patrón")
+            axp.legend()
+            figp.autofmt_xdate()
+            st.pyplot(figp)
+
+            # ----- Resumen textual -----
+            st.markdown("### 🧠 Momento crítico de definición del patrón (ANN + centroides)")
+
+            def fmt_fecha(idx):
+                f = fechas_eval[idx]
+                if isinstance(f, pd.Timestamp):
+                    return f.strftime("%d-%b")
+                else:
+                    return f"JD {jd_eval[idx]}"
+
+            if idx_crit is not None:
+                st.write(
+                    f"- **Patrón resultante:** {patron_pred}  \n"
+                    f"- **Momento crítico (primer día con P≥{UMBRAL:.0%}):** "
+                    f"**{fmt_fecha(idx_crit)}** (P = {prob_crit:.2f})  \n"
+                    f"- **Máxima certeza:** **{fmt_fecha(idx_max)}** "
+                    f"(P = {prob_max:.2f})"
+                )
+            elif idx_max is not None:
+                st.write(
+                    f"- **Patrón resultante:** {patron_pred}  \n"
+                    f"- No se alcanzó el umbral de {UMBRAL:.0%}, "
+                    f"pero la máxima certeza se logra el **{fmt_fecha(idx_max)}** "
+                    f"con P = **{prob_max:.2f}**."
+                )
             else:
-                max_str = f"JD {dias_eval[idx_max]}"
+                st.info("No se pudo calcular un resumen de certeza temporal.")
 
-            st.write(
-                f"- **Patrón resultante:** {patron_pred}  \n"
-                f"- **Momento crítico (primer día con P≥{UMBRAL:.0%}):** **{crit_str}** "
-                f"(P = {prob_crit:.2f})  \n"
-                f"- **Fecha/día de máxima certeza:** **{max_str}** "
-                f"(P = {prob_max:.2f})"
-            )
-        elif prob_max is not None:
-            if isinstance(fecha_max, pd.Timestamp):
-                max_str = fecha_max.strftime("%d-%b")
-            else:
-                max_str = f"JD {dias_eval[idx_max]}"
-            st.write(
-                f"- **Patrón resultante:** {patron_pred}  \n"
-                f"- No se alcanzó el umbral de {UMBRAL:.0%}, "
-                f"pero la máxima certeza se logra en **{max_str}** "
-                f"con P = **{prob_max:.2f}**."
-            )
-        else:
-            st.info("No se pudo calcular la evolución de probabilidad del patrón.")
+            # ----- Nivel de confianza global -----
+            if prob_max is not None:
+                if cobertura >= 0.7 and prob_max >= 0.8:
+                    nivel_conf = "ALTA"
+                    color_conf = "green"
+                elif cobertura >= 0.4 and prob_max >= 0.65:
+                    nivel_conf = "MEDIA"
+                    color_conf = "orange"
+                else:
+                    nivel_conf = "BAJA"
+                    color_conf = "red"
 
-        # Nivel de confianza global (ALTA / MEDIA / BAJA)
-        if prob_max is not None:
-            if cobertura >= 0.7 and prob_max >= 0.8:
-                nivel_conf = "ALTA"
-                color_conf = "green"
-            elif cobertura >= 0.4 and prob_max >= 0.65:
-                nivel_conf = "MEDIA"
-                color_conf = "orange"
-            else:
-                nivel_conf = "BAJA"
-                color_conf = "red"
+                st.markdown(
+                    f"### 🔒 Nivel de confianza global (ANN + centroides): "
+                    f"<span style='color:{color_conf}; font-size:26px;'>{nivel_conf}</span>",
+                    unsafe_allow_html=True
+                )
+                st.write(
+                    f"- **Cobertura temporal:** {cobertura*100:.1f} % de la temporada (1-ene→1-oct)  \n"
+                    f"- **Probabilidad máxima del patrón seleccionado:** {prob_max:.2f}"
+                )
 
-            st.markdown(
-                f"### 🔒 Nivel de confianza global: "
-                f"<span style='color:{color_conf}; font-size:26px;'>{nivel_conf}</span>",
-                unsafe_allow_html=True
-            )
-            st.write(
-                f"- **Cobertura temporal:** {cobertura*100:.1f} % de la temporada (1-ene→1-oct)  \n"
-                f"- **Probabilidad máxima del patrón seleccionado:** {prob_max:.2f}"
-            )
+except Exception as e:
+    st.error(f"No se pudo calcular la certeza diaria del patrón (ANN+centroides): {e}")
 
-    except Exception as e:
-        st.error(f"No se pudo calcular la certeza diaria del patrón: {e}")
 
+    
     # ===========================================================
     # ANN solo si tenemos modelo y columnas mínimas
     # ===========================================================
