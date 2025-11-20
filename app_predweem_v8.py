@@ -765,6 +765,37 @@ if uploaded is not None:
                 mime="text/csv"
             )
 
+# ---------------------------------------------------------
+# 📈 GRÁFICO COMPARATIVO: EMERAC OBSERVADA VS PREDICHA
+# ---------------------------------------------------------
+def plot_comparativo_curvas(jd, emerac_pred, emerac_obs, nombre_obs="Observada"):
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # --- Normalización a 0–1 ---
+    pred = np.asarray(emerac_pred, float)
+    obs  = np.asarray(emerac_obs, float)
+
+    if pred.max() > 0: pred_norm = pred / pred.max()
+    else: pred_norm = pred
+
+    if obs.max() > 0: obs_norm = obs / obs.max()
+    else: obs_norm = obs
+
+    # --- Gráfico ---
+    ax.plot(jd, pred_norm, color="blue", linewidth=3,
+            label="Predicha (ANN)")
+
+    ax.plot(jd, obs_norm, color="red", linewidth=2,
+            linestyle="--", label=f"{nombre_obs}")
+
+    ax.set_xlabel("Día Juliano")
+    ax.set_ylabel("Emergencia acumulada (0–1)")
+    ax.set_title("Comparación EMERAC — Observada vs Predicha")
+
+    ax.grid(True, alpha=0.25)
+    ax.legend()
+
+    return fig
 
 
 
