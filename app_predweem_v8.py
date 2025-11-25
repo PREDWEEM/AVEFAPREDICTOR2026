@@ -596,6 +596,116 @@ try:
 except Exception as e:
     st.error(f"No se pudo generar el radar JD25–95: {e}")
 
+# ===============================================================
+# 🌾 MÓDULO — ANÁLISIS AGRONÓMICO INTELIGENTE (AAI)
+# ===============================================================
+st.subheader("🌾 Análisis Agronómico Inteligente del Patrón Detectado")
+
+if patron is None:
+    st.info("Aún no hay patrón asignado. Cargue datos meteorológicos para continuar.")
+else:
+    st.markdown(f"### 🟢 Patrón asignado: **{patron}**")
+
+    # -----------------------------------------------------------
+    # Diccionario de análisis agronómico profundo
+    # -----------------------------------------------------------
+    analisis = {
+        "Early": """
+### 🟩 **EARLY (Temprano)**
+- **Inicio:** JD 45–75  
+- **JD50:** <110  
+- Emergencia muy compacta y agresiva al inicio del ciclo.
+- El barbecho es la **variable más crítica**: cualquier falla → explosión de plántulas.  
+- Requiere **residuales potentes pre-siembra y pre-emergencia**:
+  - Flumioxazin
+  - Sulfentrazone
+  - Metribuzin
+- Manejo post-emergente poco eficiente (llega tarde).  
+- Riesgo de pérdida de rendimiento temprano **40–60%** si no se controla en los primeros estadios.
+""",
+
+        "Intermediate": """
+### 🟨 **INTERMEDIATE (Intermedio)**
+- **Inicio:** JD 70–100  
+- **JD50:** 120–140  
+- Emergencia en 2–3 oleadas, más distribuida en el tiempo.
+- Requiere **combinación de residuales + monitoreo frecuente**.
+- Buen desempeño de residuales de **persistencia media**.
+- Los post-emergentes funcionan bien entre JD 100–150.
+- Riesgo: cohortes tardías si se aplica residual demasiado temprano.
+""",
+
+        "Extended": """
+### 🟥 **EXTENDED (Extendido)**
+- **Inicio:** JD 50–80  
+- **JD50:** >150  
+- Emergencia muy prolongada: mezcla de cohortes tempranas, medias y tardías.
+- Situación de **alta presión**: requiere manejo más intensivo.
+- Necesita **residuales prolongados y solapados**:
+  - Flumioxazin + Metribuzin
+  - Sulfentrazone
+- Requiere monitoreos cada 12–14 días.
+- Riesgo elevado de **escapes tardíos** y competencia prolongada.
+""",
+
+        "Late": """
+### 🟦 **LATE (Tardío)**
+- **Inicio:** >JD 85  
+- **JD50:** >150  
+- Emergencia abrupta tardía, asociada a lluvias y calor de primavera.
+- Residuales pre-siembra **pierden eficacia por llegar demasiado temprano**.
+- El cultivo ya implantado **ayuda a competir**.
+- Manejo óptimo:
+  - **Graminicidas post-emergentes** (1–3 macollos)
+  - **Residual pos-siembra** (Metribuzin / Pyroxasulfone)
+- Riesgo: explosión tardía difícil de controlar si se atrasa el post-emergente.
+"""
+    }
+
+    # Mostrar el análisis del patrón
+    st.markdown(analisis.get(patron, "No hay análisis disponible para este patrón."))
+
+    # -----------------------------------------------------------
+    # 🔔 ALERTAS DE RIESGO INTELIGENTES
+    # -----------------------------------------------------------
+    st.markdown("### ⚠ Alertas de manejo")
+
+    if patron == "Early":
+        st.warning("""
+**⚠ ALERTA TEMPRANA**
+- Alta probabilidad de interferencia inicial con trigo/cebada.
+- Control insuficiente en barbecho → pérdidas severas de rinde.
+""")
+    if patron == "Intermediate":
+        st.info("""
+**ℹ Atención**
+- Ajustar el momento del residual para evitar quedar sin cobertura en las oleadas tardías.
+""")
+    if patron == "Extended":
+        st.error("""
+**❗ Riesgo Alto**
+- Escapes tardíos muy probables si no hay solapamiento de residuales.
+- Costo elevado de control → manejo intensivo recomendado.
+""")
+    if patron == "Late":
+        st.warning("""
+**⚠ Emergencia Tardía Intensa**
+- Si se atrasa el post-emergente, aumentan los escapes.
+- Revisar estado del cultivo antes del graminicida.
+""")
+
+    # -----------------------------------------------------------
+    # 📘 Recomendación resumida
+    # -----------------------------------------------------------
+    st.markdown("### 📘 Recomendación agronómica clave")
+    resumen = {
+        "Early": "Priorizar residuales potentes antes de la siembra.",
+        "Intermediate": "Combinación de residual + post-emergente en ventana 100–150 JD.",
+        "Extended": "Solapar residuales y monitorear cada 12 días.",
+        "Late": "Ajustar graminicidas post-emergentes a estadios 1–3 macollos."
+    }
+    st.success(resumen.get(patron, ""))
+
 
 # ===============================================================
 # DESCARGA DE SERIE ANN
