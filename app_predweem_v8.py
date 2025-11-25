@@ -510,6 +510,92 @@ else:
     except Exception as e:
         st.error(f"No se pudo generar el diagnóstico visual avanzado: {e}")
 
+# ===============================================================
+# RADAR DE PERCENTILES — JD25 · JD50 · JD75 · JD95
+# Comparación ANN vs centroides históricos
+# ===============================================================
+
+st.subheader("📈 Radar de percentiles (JD25–JD95)")
+
+try:
+    # -------------------------------
+    # Percentiles de la curva ANN
+    # -------------------------------
+    if vals is None:
+        st.warning("No hay percentiles válidos para trazar el radar.")
+    else:
+        jd25_ann, jd50_ann, jd75_ann, jd95_ann = vals
+        ann_vec = np.array([jd25_ann, jd50_ann, jd75_ann, jd95_ann], float)
+
+        # -------------------------------
+        # Datos de los centroides
+        # -------------------------------
+        patrones = list(C.index)
+        centroid_matrix = C[["JD25","JD50","JD75","JD95"]].to_numpy(float)
+
+        # -------------------------------
+        # Preparar etiquetas y ángulos
+        # -------------------------------
+        labels_radar = ["JD25", "JD50", "JD75", "JD95"]
+        angles = np.linspace(0, 2*np.pi, len(labels_radar), endpoint=False)
+        angles = np.concatenate([angles, angles[:1]])
+
+        # -------------------------------
+        # Crear figura Radar
+        # -------------------------------
+        fig_rad, ax = plt.subplots(subplot_kw={"projection":"polar"}, figsize=(7,7))
+        ax.set_theta_offset(np.pi/2)
+        ax.set_theta_direction(-1)
+
+        # -------------------------------
+        # Trazar centroides por patrón
+        # -------------------------------
+        color_map = {"Early":"green", "Intermediate":"gold",
+                     "Extended":"red", "Late":"blue"}
+
+        for i, pat in enumerate(patrones):
+            vec = centroid_matrix[i]
+            vec = np.concatenate([vec, vec[:1]])
+            ax.plot(angles, vec, lw=2, label=f"{pat} (centroide)",
+                    color=color_map.get(pat,"gray"), alpha=0.8)
+            ax.fill(angles, vec, alpha=0.08, color=color_map.get(pat,"gray"))
+
+        # -------------------------------
+        # Trazar curva ANN evaluada
+        # -------------------------------
+        ann_plot = np.concatenate([ann_vec, ann_vec[:1]])
+        ax.plot(angles, ann_plot, lw=3, color="black", label="Año evaluado (ANN)")
+        ax.scatter(angles, ann_plot, color="black")
+
+        # -------------------------------
+        # Opcional: año representativo
+        # -------------------------------
+        if patron in rep_year:
+            yr = rep_year[patron]
+            if yr in curvas_hist:
+                dfp = curvas_hist[yr]
+                pvals = _compute_jd_percentiles(dfp["JD"], dfp["EMERAC"])
+                if pvals is not None:
+                    rep = np.concatenate([pvals, pvals[:1]])
+                    ax.plot(angles, rep, lw=2, color=color_map.get(patron,"gray"),
+                            linestyle="--", label=f"Representativo {patron} ({yr})")
+
+        # -------------------------------
+        # Formato general
+        # -------------------------------
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(labels_radar, fontsize=12)
+
+        ax.set_rlabel_position(0)
+        ax.grid(True, alpha=0.3)
+        ax.set_title("Radar JD25–JD95 — Comparación ANN vs patrones", fontsize=14)
+
+        ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.15), ncol=2)
+        st.pyplot(fig_rad)
+
+except Exception as e:
+    st.error(f"No se pudo generar el radar JD25–95: {e}")
+
 
 # ===============================================================
 # DESCARGA DE SERIE ANN
