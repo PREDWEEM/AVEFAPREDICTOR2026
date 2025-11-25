@@ -1,8 +1,9 @@
-
 # ===============================================================
-# 🌾 PREDWEEM v8.5 — AVEFA Predictor 2026 
+# 🌾 PREDWEEM v8.5 — AVEFA Predictor 2026
 # ANN + Centroides + Reglas agronómicas avanzadas
-# + Módulo de diagnóstico visual avanzado
+# + Diagnóstico visual avanzado
+# + Radar JD25–JD95
+# + Diagnóstico agronómico simple + mixto
 # ===============================================================
 
 import streamlit as st
@@ -27,7 +28,7 @@ header [data-testid="stToolbar"] {visibility: hidden;}
 """, unsafe_allow_html=True)
 
 st.title("🌾 PREDWEEM v8.5 — AVEFA Predictor 2026")
-st.subheader("ANN + Centroides + Reglas fisiológicas avanzadas")
+st.subheader("ANN + Centroides + Reglas fisiológicas avanzadas + Diagnóstico agronómico")
 
 BASE = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 
@@ -35,7 +36,6 @@ BASE = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 # ===============================================================
 # FUNCIONES AUXILIARES
 # ===============================================================
-
 def safe(fn, msg):
     try:
         return fn()
@@ -43,16 +43,16 @@ def safe(fn, msg):
         st.error(f"{msg}: {e}")
         return None
 
+
 def rmse_curvas(y_pred, y_obs):
     y_pred = np.asarray(y_pred, float)
-    y_obs  = np.asarray(y_obs, float)
+    y_obs = np.asarray(y_obs, float)
     return float(np.sqrt(np.mean((y_pred - y_obs) ** 2)))
 
 
 # ===============================================================
-# COMPUTO DE PERCENTILES
+# COMPUTO DE PERCENTILES (JD25–JD95)
 # ===============================================================
-
 def _compute_jd_percentiles(jd, emerac, qs=(0.25, 0.5, 0.75, 0.95)):
     jd = np.asarray(jd, float)
     emer = np.asarray(emerac, float)
@@ -71,9 +71,9 @@ def _compute_jd_percentiles(jd, emerac, qs=(0.25, 0.5, 0.75, 0.95)):
 # ===============================================================
 # CARGA HISTÓRICA + CENTROIDES
 # ===============================================================
-
 def _load_curves_emereac():
     curvas = {}
+    # 1977–1998
     try:
         xls1 = pd.ExcelFile(BASE / "emergencia_acumulada_interpolada 1977-1998.xlsx")
         for sh in xls1.sheet_names:
@@ -85,6 +85,7 @@ def _load_curves_emereac():
     except Exception:
         pass
 
+    # 2000–2015
     try:
         xls2 = pd.ExcelFile(BASE / "emergencia_2000_2015_interpolada.xlsx")
         for sh in xls2.sheet_names:
@@ -98,17 +99,18 @@ def _load_curves_emereac():
 
     return curvas
 
+
 def _assign_labels_from_centroids(curvas, C):
-    regs = []
+    registros = []
     for year, df in curvas.items():
         vals = _compute_jd_percentiles(df["JD"], df["EMERAC"])
         if vals is None:
             continue
         d25, d50, d75, d95 = vals
-        v = np.array(vals)
+        v = np.array([d25, d50, d75, d95], float)
         dists = np.linalg.norm(C.values - v, axis=1)
         patron = C.index[np.argmin(dists)]
-        regs.append({
+        registros.append({
             "anio": int(year),
             "patron": str(patron),
             "JD25": d25,
@@ -116,12 +118,15 @@ def _assign_labels_from_centroids(curvas, C):
             "JD75": d75,
             "JD95": d95
         })
-    return pd.DataFrame(regs)
+    if len(registros) == 0:
+        return pd.DataFrame(columns=["anio", "patron", "JD25", "JD50", "JD75", "JD95"])
+    return pd.DataFrame(registros)
+
 
 @st.cache_resource
 def load_centroides_y_historia():
     cent = joblib.load(BASE / "predweem_model_centroides.pkl")
-    C = cent["centroides"]
+    C = cent["centroides"]  # DataFrame con columnas JD25–JD95, índice = patrones
     curvas = _load_curves_emereac()
     labels = _assign_labels_from_centroids(curvas, C)
 
@@ -140,7 +145,6 @@ def load_centroides_y_historia():
 # ===============================================================
 # ANN
 # ===============================================================
-
 class PracticalANNModel:
     def __init__(self, IW, bIW, LW, bLW):
         self.IW = IW
@@ -167,31 +171,33 @@ class PracticalANNModel:
         emerrel = np.diff(emerac, prepend=0)
         return emerrel, emerac
 
+
 @st.cache_resource
 def load_ann():
-    IW  = np.load(BASE / "IW.npy")
+    IW = np.load(BASE / "IW.npy")
     bIW = np.load(BASE / "bias_IW.npy")
-    LW  = np.load(BASE / "LW.npy")
+    LW = np.load(BASE / "LW.npy")
     bLW = np.load(BASE / "bias_out.npy")
     return PracticalANNModel(IW, bIW, LW, bLW)
+
 
 def postprocess_emergence(raw, smooth=True, window=3, clip_zero=True):
     emer = np.maximum(raw, 0.0) if clip_zero else raw
     if smooth and window > 1:
-        k = np.ones(int(window)) / int(window)
-        emer = np.convolve(emer, k, mode="same")
+        window = int(window)
+        kernel = np.ones(window) / window
+        emer = np.convolve(emer, kernel, mode="same")
     emerac = np.cumsum(emer)
     return emer, emerac
 
 
 # ===============================================================
-# REGLAS AGRONÓMICAS
+# REGLAS AGRONÓMICAS (EARLY / INTERMEDIATE / EXTENDED / LATE)
 # ===============================================================
-
 def aplicar_reglas_agronomicas(JD_ini, JD25, JD50, JD75, JD95, patron_inicial=None):
     """
-    Devuelve el patrón 'override' si alguna regla lo define claramente.
-    Si no hay override, devuelve None y se usa la clasificación por centroides.
+    Devuelve patrón 'override' si las reglas agronómicas son claras.
+    Si no hay override, devuelve None y se usa el centroide más cercano.
     """
 
     banda = JD75 - JD25
@@ -218,6 +224,8 @@ def aplicar_reglas_agronomicas(JD_ini, JD25, JD50, JD75, JD95, patron_inicial=No
 def clasificar_patron_desde_ann(dias, emerac, C):
     """
     ANN -> EMERAC -> percentiles -> reglas agronómicas + centroides.
+    Devuelve:
+      patron_final, vals(JD25–JD95), distancias a centroides, prob_dict
     """
 
     vals = _compute_jd_percentiles(dias, emerac)
@@ -227,11 +235,10 @@ def clasificar_patron_desde_ann(dias, emerac, C):
     d25, d50, d75, d95 = vals
     v = np.array([d25, d50, d75, d95], float)
 
-    # Distancias a centroides
     dists = np.linalg.norm(C.values - v, axis=1)
     w = 1.0 / (dists + 1e-6)
     p = w / w.sum()
-    prob_base = {str(C.index[i]): float(p[i]) for i in range(len(C.index))}
+    prob_dict = {str(C.index[i]): float(p[i]) for i in range(len(C.index))}
 
     emerac = np.asarray(emerac, float)
     dias = np.asarray(dias, float)
@@ -239,30 +246,29 @@ def clasificar_patron_desde_ann(dias, emerac, C):
     idx = np.where(emerac > 0.01)[0]
     JD_ini = dias[idx[0]] if len(idx) > 0 else np.inf
 
-    # Reglas agronómicas
+    # Aplicar reglas agronómicas
     override = aplicar_reglas_agronomicas(JD_ini, d25, d50, d75, d95, None)
 
     if override is not None and override in C.index:
         patron_final = override
         d_mod = dists.copy()
         idxp = list(C.index).index(patron_final)
-        d_mod[idxp] = -1.0  # forzamos que sea el más cercano
+        d_mod[idxp] = -1.0  # forzamos este patrón
 
         w = 1.0 / (d_mod - d_mod.min() + 1e-6)
         p = w / w.sum()
         prob_mod = {str(C.index[i]): float(p[i]) for i in range(len(C.index))}
         return patron_final, vals, d_mod, prob_mod
 
-    # Sin override → centroide más cercano
+    # Si no hay override → centroide más cercano
     idx_min = int(np.argmin(dists))
     patron = str(C.index[idx_min])
-    return patron, vals, dists, prob_base
+    return patron, vals, dists, prob_dict
 
 
 # ===============================================================
-# NORMALIZAR ARCHIVO METEO
+# NORMALIZAR ARCHIVO METEOROLÓGICO
 # ===============================================================
-
 def normalizar_meteo(df):
     df = df.copy()
     cols = {c.lower(): c for c in df.columns}
@@ -274,16 +280,16 @@ def normalizar_meteo(df):
                     return v
         return None
 
-    c_jd   = pick("jd", "julian", "dia")
+    c_jd = pick("jd", "julian", "dia")
     c_tmax = pick("tmax")
     c_tmin = pick("tmin")
     c_prec = pick("prec", "lluv")
-    c_fecha= pick("fecha")
+    c_fecha = pick("fecha")
 
     if None in (c_jd, c_tmax, c_tmin, c_prec):
-        raise ValueError("No se identifican JD / TMAX / TMIN / Prec en el archivo meteorológico.")
+        raise ValueError("No se identifican JD / TMAX / TMIN / Prec en el archivo.")
 
-    df["JD"]   = pd.to_numeric(df[c_jd],   errors="coerce")
+    df["JD"] = pd.to_numeric(df[c_jd], errors="coerce")
     df["TMAX"] = pd.to_numeric(df[c_tmax], errors="coerce")
     df["TMIN"] = pd.to_numeric(df[c_tmin], errors="coerce")
     df["Prec"] = pd.to_numeric(df[c_prec], errors="coerce")
@@ -297,16 +303,15 @@ def normalizar_meteo(df):
 
 
 # ===============================================================
-# MÓDULO: ESTADÍSTICAS DE PATRONES PARA DIAGNÓSTICO VISUAL
+# ESTADÍSTICAS PARA DIAGNÓSTICO VISUAL (BANDAS 25–75)
 # ===============================================================
-
 def build_patron_stats(C, labels_df, curvas_hist, jd_min=1, jd_max=365):
     """
-    Construye, para cada patrón, curvas:
+    Para cada patrón genera curvas:
       - mediana
       - p25
       - p75
-    sobre una grilla común de JD.
+    en una grilla común de JD.
     """
     grid = np.arange(jd_min, jd_max + 1)
     stats = {}
@@ -330,8 +335,8 @@ def build_patron_stats(C, labels_df, curvas_hist, jd_min=1, jd_max=365):
         stats[str(patron)] = {
             "grid": grid,
             "median": np.nanmedian(A, axis=0),
-            "p25":    np.nanpercentile(A, 25, axis=0),
-            "p75":    np.nanpercentile(A, 75, axis=0),
+            "p25": np.nanpercentile(A, 25, axis=0),
+            "p75": np.nanpercentile(A, 75, axis=0),
         }
     return stats
 
@@ -339,18 +344,16 @@ def build_patron_stats(C, labels_df, curvas_hist, jd_min=1, jd_max=365):
 # ===============================================================
 # SIDEBAR
 # ===============================================================
-
 with st.sidebar:
     st.header("Ajustes ANN")
-    smooth   = st.checkbox("Suavizar EMERREL", True)
-    window   = st.slider("Ventana de suavizado (días)", 1, 9, 3)
-    clip     = st.checkbox("Recortar valores negativos a 0", True)
+    smooth = st.checkbox("Suavizar EMERREL", True)
+    window = st.slider("Ventana de suavizado (días)", 1, 9, 3)
+    clip = st.checkbox("Recortar negativos a 0", True)
 
 
 # ===============================================================
-# CARGA METEO
+# CARGA METEOROLOGÍA
 # ===============================================================
-
 st.subheader("📤 Cargar archivo meteorológico")
 uploaded = st.file_uploader("Archivo CSV o XLSX con JD, TMAX, TMIN, Prec", type=["csv", "xlsx"])
 
@@ -376,24 +379,23 @@ if modelo_ann is None:
 # ===============================================================
 # ANN → EMERREL / EMERAC
 # ===============================================================
-
 st.subheader("🔍 Emergencia simulada por ANN (EMERREL / EMERAC)")
 
 df_ann = df_meteo.copy()
-dias   = df_ann["JD"].to_numpy(float)
-X      = df_ann[["JD", "TMAX", "TMIN", "Prec"]].to_numpy(float)
+dias = df_ann["JD"].to_numpy(float)
+X = df_ann[["JD", "TMAX", "TMIN", "Prec"]].to_numpy(float)
 
 emerrel_raw, emerac_raw = modelo_ann.predict(X)
 emerrel, emerac = postprocess_emergence(emerrel_raw, smooth=smooth, window=window, clip_zero=clip)
 
 df_ann["EMERREL"] = emerrel
-df_ann["EMERAC"]  = emerac
+df_ann["EMERAC"] = emerac
 
 col1, col2 = st.columns(2)
 with col1:
     fig, ax = plt.subplots(figsize=(5, 4))
     ax.plot(dias, emerrel_raw, label="EMERREL cruda", color="red", alpha=0.5)
-    ax.plot(dias, emerrel,     label="EMERREL procesada", color="blue", linewidth=2)
+    ax.plot(dias, emerrel, label="EMERREL procesada", color="blue", linewidth=2)
     ax.set_xlabel("Día Juliano")
     ax.set_ylabel("EMERREL (fracción diaria)")
     ax.set_title("EMERREL — ANN")
@@ -420,9 +422,8 @@ with col2:
 
 
 # ===============================================================
-# CLASIFICACIÓN COMPLETA
+# CLASIFICACIÓN DEL PATRÓN
 # ===============================================================
-
 st.subheader("🌱 Clasificación del patrón (ANN + centroides + reglas)")
 
 C, labels_df, rep_year, curvas_hist = safe(
@@ -433,7 +434,7 @@ C, labels_df, rep_year, curvas_hist = safe(
 if C is None:
     st.stop()
 
-patron, vals, dists, probs = clasificar_patron_desde_ann(dias, emerac, C)
+patron, vals, dists, prob_dict = clasificar_patron_desde_ann(dias, emerac, C)
 
 if patron is None:
     st.error("No se pudo clasificar el patrón (la curva ANN no alcanza suficiente emergencia).")
@@ -441,12 +442,12 @@ if patron is None:
 
 st.markdown(f"### 🟢 Patrón resultante: **{patron}**")
 st.write("**Probabilidades relativas por patrón:**")
-st.json(probs)
+st.json(prob_dict)
 
 dist_table = pd.DataFrame({
-    "Patrón": list(C.index),
+    "Patrón": [str(p) for p in C.index],
     "Distancia al centroide": dists,
-    "Probabilidad relativa": [probs.get(str(p), np.nan) for p in C.index]
+    "Probabilidad relativa": [prob_dict.get(str(p), np.nan) for p in C.index]
 }).sort_values("Distancia al centroide")
 
 st.dataframe(dist_table, use_container_width=True)
@@ -456,9 +457,67 @@ if str(patron) in rep_year:
 
 
 # ===============================================================
-# 🔎 DIAGNÓSTICO VISUAL AVANZADO
+# RADAR JD25–JD95 (ANN vs CENTROIDES)
 # ===============================================================
+st.subheader("📈 Radar de percentiles (JD25–JD95)")
 
+try:
+    if vals is None:
+        st.warning("No hay percentiles válidos para trazar el radar.")
+    else:
+        jd25_ann, jd50_ann, jd75_ann, jd95_ann = vals
+        ann_vec = np.array([jd25_ann, jd50_ann, jd75_ann, jd95_ann], float)
+
+        patrones = list(C.index)
+        centroid_matrix = C[["JD25", "JD50", "JD75", "JD95"]].to_numpy(float)
+
+        labels_radar = ["JD25", "JD50", "JD75", "JD95"]
+        angles = np.linspace(0, 2*np.pi, len(labels_radar), endpoint=False)
+        angles = np.concatenate([angles, angles[:1]])
+
+        fig_rad, ax = plt.subplots(subplot_kw={"projection": "polar"}, figsize=(7, 7))
+        ax.set_theta_offset(np.pi/2)
+        ax.set_theta_direction(-1)
+
+        color_map = {"Early": "green", "Intermediate": "gold",
+                     "Extended": "red", "Late": "blue"}
+
+        for i, pat in enumerate(patrones):
+            vec = centroid_matrix[i]
+            vec = np.concatenate([vec, vec[:1]])
+            ax.plot(angles, vec, lw=2, label=f"{pat} (centroide)",
+                    color=color_map.get(pat, "gray"), alpha=0.8)
+            ax.fill(angles, vec, alpha=0.08, color=color_map.get(pat, "gray"))
+
+        ann_plot = np.concatenate([ann_vec, ann_vec[:1]])
+        ax.plot(angles, ann_plot, lw=3, color="black", label="Año evaluado (ANN)")
+        ax.scatter(angles, ann_plot, color="black")
+
+        if patron in rep_year:
+            yr = rep_year[patron]
+            if yr in curvas_hist:
+                dfp = curvas_hist[yr]
+                pvals = _compute_jd_percentiles(dfp["JD"], dfp["EMERAC"])
+                if pvals is not None:
+                    rep = np.concatenate([pvals, pvals[:1]])
+                    ax.plot(angles, rep, lw=2, color=color_map.get(patron, "gray"),
+                            linestyle="--", label=f"Representativo {patron} ({yr})")
+
+        ax.set_xticks(angles[:-1])
+        ax.set_xticklabels(labels_radar, fontsize=12)
+        ax.set_rlabel_position(0)
+        ax.grid(True, alpha=0.3)
+        ax.set_title("Radar JD25–JD95 — Comparación ANN vs patrones", fontsize=14)
+        ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.15), ncol=2)
+        st.pyplot(fig_rad)
+
+except Exception as e:
+    st.error(f"No se pudo generar el radar JD25–95: {e}")
+
+
+# ===============================================================
+# DIAGNÓSTICO VISUAL AVANZADO (BANDAS 25–75 + CURVA ANN)
+# ===============================================================
 st.subheader("🔎 Diagnóstico visual avanzado: patrones vs curva ANN")
 
 if (labels_df is None) or (curvas_hist is None):
@@ -469,7 +528,6 @@ else:
         jd_max = int(min(365, np.ceil(dias.max())))
         stats = build_patron_stats(C, labels_df, curvas_hist, jd_min=jd_min, jd_max=jd_max)
 
-        # Curva ANN normalizada e interpolada a la grilla común
         grid = np.arange(jd_min, jd_max + 1)
         if emerac[-1] > 0:
             emerac_norm = emerac / emerac[-1]
@@ -491,7 +549,6 @@ else:
         axd.plot(grid, emerac_ann_interp,
                  color="black", lw=3, label="Curva ANN evaluada")
 
-        # Percentiles ANN (JD25–95) como líneas verticales
         if vals is not None:
             jd25, jd50, jd75, jd95 = vals
             for x, lbl in zip([jd25, jd50, jd75, jd95], ["JD25", "JD50", "JD75", "JD95"]):
@@ -510,213 +567,200 @@ else:
     except Exception as e:
         st.error(f"No se pudo generar el diagnóstico visual avanzado: {e}")
 
-# ===============================================================
-# RADAR DE PERCENTILES — JD25 · JD50 · JD75 · JD95
-# Comparación ANN vs centroides históricos
-# ===============================================================
-
-st.subheader("📈 Radar de percentiles (JD25–JD95)")
-
-try:
-    # -------------------------------
-    # Percentiles de la curva ANN
-    # -------------------------------
-    if vals is None:
-        st.warning("No hay percentiles válidos para trazar el radar.")
-    else:
-        jd25_ann, jd50_ann, jd75_ann, jd95_ann = vals
-        ann_vec = np.array([jd25_ann, jd50_ann, jd75_ann, jd95_ann], float)
-
-        # -------------------------------
-        # Datos de los centroides
-        # -------------------------------
-        patrones = list(C.index)
-        centroid_matrix = C[["JD25","JD50","JD75","JD95"]].to_numpy(float)
-
-        # -------------------------------
-        # Preparar etiquetas y ángulos
-        # -------------------------------
-        labels_radar = ["JD25", "JD50", "JD75", "JD95"]
-        angles = np.linspace(0, 2*np.pi, len(labels_radar), endpoint=False)
-        angles = np.concatenate([angles, angles[:1]])
-
-        # -------------------------------
-        # Crear figura Radar
-        # -------------------------------
-        fig_rad, ax = plt.subplots(subplot_kw={"projection":"polar"}, figsize=(7,7))
-        ax.set_theta_offset(np.pi/2)
-        ax.set_theta_direction(-1)
-
-        # -------------------------------
-        # Trazar centroides por patrón
-        # -------------------------------
-        color_map = {"Early":"green", "Intermediate":"gold",
-                     "Extended":"red", "Late":"blue"}
-
-        for i, pat in enumerate(patrones):
-            vec = centroid_matrix[i]
-            vec = np.concatenate([vec, vec[:1]])
-            ax.plot(angles, vec, lw=2, label=f"{pat} (centroide)",
-                    color=color_map.get(pat,"gray"), alpha=0.8)
-            ax.fill(angles, vec, alpha=0.08, color=color_map.get(pat,"gray"))
-
-        # -------------------------------
-        # Trazar curva ANN evaluada
-        # -------------------------------
-        ann_plot = np.concatenate([ann_vec, ann_vec[:1]])
-        ax.plot(angles, ann_plot, lw=3, color="black", label="Año evaluado (ANN)")
-        ax.scatter(angles, ann_plot, color="black")
-
-        # -------------------------------
-        # Opcional: año representativo
-        # -------------------------------
-        if patron in rep_year:
-            yr = rep_year[patron]
-            if yr in curvas_hist:
-                dfp = curvas_hist[yr]
-                pvals = _compute_jd_percentiles(dfp["JD"], dfp["EMERAC"])
-                if pvals is not None:
-                    rep = np.concatenate([pvals, pvals[:1]])
-                    ax.plot(angles, rep, lw=2, color=color_map.get(patron,"gray"),
-                            linestyle="--", label=f"Representativo {patron} ({yr})")
-
-        # -------------------------------
-        # Formato general
-        # -------------------------------
-        ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(labels_radar, fontsize=12)
-
-        ax.set_rlabel_position(0)
-        ax.grid(True, alpha=0.3)
-        ax.set_title("Radar JD25–JD95 — Comparación ANN vs patrones", fontsize=14)
-
-        ax.legend(loc="lower center", bbox_to_anchor=(0.5, -0.15), ncol=2)
-        st.pyplot(fig_rad)
-
-except Exception as e:
-    st.error(f"No se pudo generar el radar JD25–95: {e}")
 
 # ===============================================================
-# 🌾 MÓDULO — ANÁLISIS AGRONÓMICO INTELIGENTE (AAI)
+# ANÁLISIS AGRONÓMICO INTELIGENTE (PATRÓN DOMINANTE)
 # ===============================================================
-st.subheader("🌾 Análisis Agronómico Inteligente del Patrón Detectado")
+st.subheader("🌾 Análisis Agronómico Inteligente del patrón dominante")
 
 if patron is None:
-    st.info("Aún no hay patrón asignado. Cargue datos meteorológicos para continuar.")
+    st.info("Aún no hay patrón asignado.")
 else:
     st.markdown(f"### 🟢 Patrón asignado: **{patron}**")
 
-    # -----------------------------------------------------------
-    # Diccionario de análisis agronómico profundo
-    # -----------------------------------------------------------
     analisis = {
         "Early": """
-### 🟩 **EARLY (Temprano)**
-- **Inicio:** JD 45–75  
-- **JD50:** <110  
+### 🟩 EARLY (Temprano)
+- Inicio: JD 45–75
+- JD50 < 110
 - Emergencia muy compacta y agresiva al inicio del ciclo.
-- El barbecho es la **variable más crítica**: cualquier falla → explosión de plántulas.  
-- Requiere **residuales potentes pre-siembra y pre-emergencia**:
-  - Flumioxazin
-  - Sulfentrazone
-  - Metribuzin
-- Manejo post-emergente poco eficiente (llega tarde).  
-- Riesgo de pérdida de rendimiento temprano **40–60%** si no se controla en los primeros estadios.
+- El barbecho es la variable más crítica: fallas → explosión temprana.
+- Requiere residuales potentes pre-siembra y pre-emergencia (Flumioxazin, Sulfentrazone, Metribuzin).
+- Manejo post-emergente suele llegar tarde frente al pico de emergencia.
 """,
-
         "Intermediate": """
-### 🟨 **INTERMEDIATE (Intermedio)**
-- **Inicio:** JD 70–100  
-- **JD50:** 120–140  
+### 🟨 INTERMEDIATE (Intermedio)
+- Inicio: JD 70–100
+- JD50 ≈ 120–140
 - Emergencia en 2–3 oleadas, más distribuida en el tiempo.
-- Requiere **combinación de residuales + monitoreo frecuente**.
-- Buen desempeño de residuales de **persistencia media**.
-- Los post-emergentes funcionan bien entre JD 100–150.
-- Riesgo: cohortes tardías si se aplica residual demasiado temprano.
+- Requiere combinación de residuales + monitoreo frecuente.
+- Residuales de persistencia media funcionan bien, ajustando post-emergente entre JD 100–150.
 """,
-
         "Extended": """
-### 🟥 **EXTENDED (Extendido)**
-- **Inicio:** JD 50–80  
-- **JD50:** >150  
-- Emergencia muy prolongada: mezcla de cohortes tempranas, medias y tardías.
-- Situación de **alta presión**: requiere manejo más intensivo.
-- Necesita **residuales prolongados y solapados**:
-  - Flumioxazin + Metribuzin
-  - Sulfentrazone
-- Requiere monitoreos cada 12–14 días.
-- Riesgo elevado de **escapes tardíos** y competencia prolongada.
+### 🟥 EXTENDED (Extendido)
+- Inicio: JD 50–80
+- JD50 > 150
+- Emergencia prolongada: múltiples cohortes tempranas y tardías.
+- Situación de alta presión: exige residuales prolongados y solapados.
+- Necesario monitoreo cada 12–14 días para evitar escapes.
 """,
-
         "Late": """
-### 🟦 **LATE (Tardío)**
-- **Inicio:** >JD 85  
-- **JD50:** >150  
-- Emergencia abrupta tardía, asociada a lluvias y calor de primavera.
-- Residuales pre-siembra **pierden eficacia por llegar demasiado temprano**.
-- El cultivo ya implantado **ayuda a competir**.
-- Manejo óptimo:
-  - **Graminicidas post-emergentes** (1–3 macollos)
-  - **Residual pos-siembra** (Metribuzin / Pyroxasulfone)
-- Riesgo: explosión tardía difícil de controlar si se atrasa el post-emergente.
+### 🟦 LATE (Tardío)
+- Inicio: >JD 85
+- JD50 > 150
+- Emergencia tardía asociada a lluvias y calor de primavera.
+- Residuales pre-siembra pueden quedar cortos.
+- Manejo óptimo con graminicidas post-emergentes (1–3 macollos) + residual pos-siembra.
 """
     }
 
-    # Mostrar el análisis del patrón
     st.markdown(analisis.get(patron, "No hay análisis disponible para este patrón."))
 
-    # -----------------------------------------------------------
-    # 🔔 ALERTAS DE RIESGO INTELIGENTES
-    # -----------------------------------------------------------
     st.markdown("### ⚠ Alertas de manejo")
-
     if patron == "Early":
-        st.warning("""
-**⚠ ALERTA TEMPRANA**
-- Alta probabilidad de interferencia inicial con trigo/cebada.
-- Control insuficiente en barbecho → pérdidas severas de rinde.
-""")
-    if patron == "Intermediate":
-        st.info("""
-**ℹ Atención**
-- Ajustar el momento del residual para evitar quedar sin cobertura en las oleadas tardías.
-""")
-    if patron == "Extended":
-        st.error("""
-**❗ Riesgo Alto**
-- Escapes tardíos muy probables si no hay solapamiento de residuales.
-- Costo elevado de control → manejo intensivo recomendado.
-""")
-    if patron == "Late":
-        st.warning("""
-**⚠ Emergencia Tardía Intensa**
-- Si se atrasa el post-emergente, aumentan los escapes.
-- Revisar estado del cultivo antes del graminicida.
-""")
+        st.warning("⚠ Alta presión temprana: residuales pre-siembra son críticos.")
+    elif patron == "Intermediate":
+        st.info("ℹ Atención a oleadas múltiples: ajustar ventana del post-emergente.")
+    elif patron == "Extended":
+        st.error("❗ Riesgo alto de escapes: se recomienda solapamiento de residuales.")
+    elif patron == "Late":
+        st.warning("⚠ Emergencia tardía intensa: no retrasar aplicaciones post-emergentes.")
 
-    # -----------------------------------------------------------
-    # 📘 Recomendación resumida
-    # -----------------------------------------------------------
-    st.markdown("### 📘 Recomendación agronómica clave")
-    resumen = {
-        "Early": "Priorizar residuales potentes antes de la siembra.",
-        "Intermediate": "Combinación de residual + post-emergente en ventana 100–150 JD.",
-        "Extended": "Solapar residuales y monitorear cada 12 días.",
-        "Late": "Ajustar graminicidas post-emergentes a estadios 1–3 macollos."
+
+# ===============================================================
+# DIAGNÓSTICO AGRONÓMICO MIXTO (PATRONES MÁS PROBABLES)
+# ===============================================================
+st.subheader("🌾 Diagnóstico agronómico combinado según patrones probables")
+
+if prob_dict is None:
+    st.info("Aún no se calcularon probabilidades.")
+else:
+    df_probs = pd.DataFrame([
+        {"Patrón": p, "Probabilidad": round(prob_dict[p], 3)}
+        for p in sorted(prob_dict, key=prob_dict.get, reverse=True)
+    ])
+    st.markdown("### 🔢 Probabilidades relativas por patrón")
+    st.dataframe(df_probs, use_container_width=True)
+
+    top = sorted(prob_dict.items(), key=lambda x: x[1], reverse=True)
+    patron1, p1 = top[0]
+    patron2, p2 = top[1] if len(top) > 1 else (None, 0.0)
+    patron3, p3 = top[2] if len(top) > 2 else (None, 0.0)
+
+    st.markdown(f"### 🥇 Patrón dominante: **{patron1}** ({p1:.1%})")
+    if patron2:
+        st.markdown(f"### 🥈 Segundo patrón probable: **{patron2}** ({p2:.1%})")
+    if patron3:
+        st.markdown(f"### 🥉 Tercero: **{patron3}** ({p3:.1%})")
+
+    desc = {
+        "Early": {
+            "inicio": "Muy temprano (JD 45–75)",
+            "agresividad": "Muy alta al inicio del cultivo",
+            "duracion": "Corta y compacta",
+            "manejo": "Residuales potentes pre-siembra + pre-emergencia",
+            "riesgos": "Fallas en barbecho → explosión temprana"
+        },
+        "Intermediate": {
+            "inicio": "Moderado (JD 70–100)",
+            "agresividad": "Media, distribuida",
+            "duracion": "2–3 oleadas",
+            "manejo": "Residual + post-emergente en ventana JD 100–150",
+            "riesgos": "Oleadas tardías si no se mantiene cobertura"
+        },
+        "Extended": {
+            "inicio": "Variable (JD 50–80)",
+            "agresividad": "Alta por emergencia prolongada",
+            "duracion": "Extensa (JD25–JD95 muy separados)",
+            "manejo": "Solapamiento de residuales + monitoreo 12–14 días",
+            "riesgos": "Escapes tardíos, competencia sostenida"
+        },
+        "Late": {
+            "inicio": "Tardío (JD >85)",
+            "agresividad": "Alta en el pico tardío (JD 160–230)",
+            "duracion": "Media, con pico abrupto",
+            "manejo": "Post-emergentes (1–3 macollos) + residual pos-siembra",
+            "riesgos": "Explosión tardía si se atrasa el post-emergente"
+        }
     }
-    st.success(resumen.get(patron, ""))
+
+    st.markdown("## 🌱 Síntesis agronómica combinada (Top 3 patrones)")
+    def combinar(p, peso):
+        d = desc[p]
+        txt = (
+            f"### **{p}** ({peso:.1%})\n"
+            f"- Inicio: {d['inicio']}\n"
+            f"- Agresividad: {d['agresividad']}\n"
+            f"- Duración: {d['duracion']}\n"
+            f"- Manejo recomendado: {d['manejo']}\n"
+            f"- Riesgos: {d['riesgos']}\n"
+        )
+        return txt
+
+    for p, peso in top[:3]:
+        st.markdown(combinar(p, peso))
+
+    st.markdown("## 🧠 Diagnóstico Agronómico Integrado (AAI MIXTO)")
+
+    diag = ""
+    if patron1 == "Early" and patron2 == "Extended":
+        diag = """
+### 🟥🟩 Sistema mixto Early + Extended
+- Emergencia muy temprana y sostenida → máxima presión del sistema.
+- Requiere residuales potentes y solapados.
+- Monitoreo cada 12 días para capturar oleadas largas.
+- Post-emergente necesario en ventana temprana **y** tardía.
+"""
+    elif patron1 == "Extended" and patron2 == "Late":
+        diag = """
+### 🟥🟦 Sistema tardío y prolongado (Extended + Late)
+- Inicios variables pero con pico fuerte tardío.
+- Residuales pre-siembra pueden quedar cortos.
+- Recomendado: residual pos-siembra + post-emergentes en 1–3 macollos.
+- Riesgo alto de explosión tardía si se atrasa el post-emergente.
+"""
+    elif patron1 == "Early" and patron2 == "Intermediate":
+        diag = """
+### 🟩🟨 Sistema temprano con oleadas medias
+- Foco principal: barbecho + residual temprano.
+- Ajustar post-emergente entre JD 110–150.
+- Riesgo: primera cohorte muy agresiva si el barbecho es deficiente.
+"""
+    elif patron1 == "Intermediate" and patron2 == "Extended":
+        diag = """
+### 🟨🟥 Sistema de carga media–alta prolongada
+- Emergencia en varias oleadas + prolongada.
+- Residuales de persistencia media pueden ser insuficientes.
+- Reforzar persistencia y monitoreo para evitar escapes tardíos.
+"""
+    elif patron1 == "Late" and patron2 == "Intermediate":
+        diag = """
+### 🟦🟨 Sistema tardío pero distribuido
+- Control pos-emergente es la herramienta principal.
+- Riesgo de re-emergencias que superen la ventana óptima del graminicida.
+"""
+    else:
+        diag = """
+### Diagnóstico general
+- El patrón dominante guía la estrategia de manejo.
+- Los patrones secundarios ajustan la ventana óptima de control.
+- Recomendado: combinar residual + post-emergente alrededor del JD50 estimado.
+"""
+
+    st.markdown(diag)
+    st.success(
+        f"Recomendación clave: priorizar el manejo según **{patron1}**, "
+        "ajustando ventanas y persistencia de residuales según el patrón secundario."
+    )
 
 
 # ===============================================================
 # DESCARGA DE SERIE ANN
 # ===============================================================
-
 st.download_button(
     "📥 Descargar EMERREL/EMERAC simulada (ANN)",
     df_ann.to_csv(index=False).encode("utf-8"),
     "emergencia_simulada_ANN_v85.csv",
     mime="text/csv"
 )
-
-
 
