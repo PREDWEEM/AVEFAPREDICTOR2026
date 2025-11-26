@@ -350,20 +350,49 @@ with st.sidebar:
     window = st.slider("Ventana de suavizado (días)", 1, 9, 3)
     clip = st.checkbox("Recortar negativos a 0", True)
 
-
 # ===============================================================
-# CARGA METEOROLOGÍA
+# CARGA METEOROLÓGICA (Automática + Manual)
 # ===============================================================
-st.subheader("📤 Cargar archivo meteorológico")
-uploaded = st.file_uploader("Archivo CSV o XLSX con JD, TMAX, TMIN, Prec", type=["csv", "xlsx"])
+st.subheader("📤 Datos Meteorológicos (Automático desde meteo_daily.csv o Manual)")
 
-modelo_ann = safe(load_ann, "Error cargando pesos de la ANN")
-if uploaded is None:
-    st.info("Suba un archivo meteorológico para iniciar el análisis.")
-    st.stop()
+def cargar_meteo_daily_csv():
+    """Carga automática desde meteo_daily.csv si el archivo existe."""
+    fname = BASE / "meteo_daily.csv"
+    if fname.exists():
+        try:
+            df = pd.read_csv(fname)
+            st.success("📌 Datos meteorológicos cargados automáticamente desde **meteo_daily.csv**")
+            return df
+        except Exception as e:
+            st.error(f"Error leyendo meteo_daily.csv: {e}")
+            return None
+    return None
 
-df_raw = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
-st.success("Archivo meteorológico cargado.")
+
+# ---------- PRIORIDAD 1: archivo subido manualmente ----------
+uploaded = st.file_uploader("Subir archivo meteorológico (CSV/XLSX)", type=["csv", "xlsx"])
+
+if uploaded is not None:
+    st.info("Usando archivo meteorológico subido manualmente.")
+    try:
+        df_raw = pd.read_csv(uploaded) if uploaded.name.endswith(".csv") else pd.read_excel(uploaded)
+        st.success("Archivo meteorológico cargado correctamente.")
+    except Exception as e:
+        st.error(f"Error leyendo el archivo subido: {e}")
+        st.stop()
+
+else:
+    # ---------- PRIORIDAD 2: meteo_daily.csv automático ----------
+    df_auto = cargar_meteo_daily_csv()
+    if df_auto is not None:
+        df_raw = df_auto
+    else:
+        st.warning("⚠ No se subió archivo y no existe meteo_daily.csv.")
+        st.info("Suba un archivo meteorológico para continuar.")
+        st.stop()
+
+
+# ---------- Normalización ----------
 st.dataframe(df_raw, use_container_width=True)
 
 try:
@@ -372,6 +401,8 @@ except Exception as e:
     st.error(f"Error normalizando el archivo meteorológico: {e}")
     st.stop()
 
+# Si ANN no se cargó → stop
+modelo_ann = safe(load_ann, "Error cargando pesos de la ANN")
 if modelo_ann is None:
     st.stop()
 
