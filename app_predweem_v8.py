@@ -27,8 +27,7 @@ header [data-testid="stToolbar"] {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🌾 PREDWEEM v8.5 — AVEFA Predictor 2026")
-st.subheader("ANN + Centroides + Reglas fisiológicas avanzadas + Diagnóstico agronómico")
+st.title("🌾 PREDWEEM v8.5 — AVEFA Predictor 2025")
 
 BASE = Path(__file__).parent if "__file__" in globals() else Path.cwd()
 
