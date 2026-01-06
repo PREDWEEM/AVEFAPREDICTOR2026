@@ -1,7 +1,6 @@
-
 # ===============================================================
 # 🌾 PREDWEEM v8.5 — AVEFA Predictor 2026 (Full Integrated)
-# ANN + Diagnóstico Pro + Visualización de Pulsos Interactivos
+# Actualización Automática + ANN + Radar + Heatmap + Pulsos
 # ===============================================================
 
 import streamlit as st
@@ -16,11 +15,10 @@ from datetime import datetime
 from pathlib import Path
 
 # ---------------------------------------------------------
-# CONFIGURACIÓN Y RUTAS
+# CONFIGURACIÓN Y ESTILOS
 # ---------------------------------------------------------
 st.set_page_config(page_title="PREDWEEM v8.5 — AVEFA 2026", layout="wide", page_icon="🌾")
 
-# Estilos CSS para limpieza de interfaz
 st.markdown("""
 <style>
 #MainMenu {visibility: hidden;}
@@ -62,16 +60,18 @@ def fetch_and_update_meteo():
         else:
             df_all = df_new
             
-        df_all["Juliano"] = (pd.to_datetime(df_all["Fecha"]) - START_2026).dt.days + 1
+        # Cálculo Robusto del Día Juliano 2026
+        df_all["Fecha"] = pd.to_datetime(df_all["Fecha"])
+        df_all["Juliano"] = (df_all["Fecha"] - START_2026).dt.days + 1
         df_all = df_all.sort_values("Fecha")
         df_all.to_csv(CSV_OUT, index=False)
         return df_all
     except Exception as e:
-        st.error(f"Error actualizando datos: {e}")
+        st.error(f"Error actualizando datos de MeteoBahia: {e}")
         return pd.read_csv(CSV_OUT, parse_dates=["Fecha"]) if CSV_OUT.exists() else None
 
 # ===============================================================
-# 2. MODELO ANN Y FUNCIONES TÉCNICAS
+# 2. MODELO ANN Y LÓGICA TÉCNICA
 # ===============================================================
 class PracticalANNModel:
     def __init__(self, IW, bIW, LW, bLW):
@@ -105,15 +105,15 @@ def _compute_jd_percentiles(jd, emerac):
     return np.array([np.interp(q, y, jd) for q in [0.25, 0.5, 0.75, 0.95]], float)
 
 # ===============================================================
-# 3. INTERFAZ Y PROCESAMIENTO
+# 3. INTERFAZ Y DASHBOARD
 # ===============================================================
 st.title("🌾 PREDWEEM v8.5 — AVEFA Predictor 2026")
 
 with st.sidebar:
     st.header("⚙️ Configuración")
     umbral_alerta = st.slider("Umbral de Alerta Crítica", 0.1, 1.0, 0.5)
-    smooth_win = st.slider("Suavizado (días)", 1, 9, 3)
-    if st.button("🔄 Actualizar Meteo"):
+    smooth_win = st.slider("Ventana Suavizado (días)", 1, 9, 3)
+    if st.button("🔄 Forzar Actualización"):
         st.cache_data.clear()
         st.rerun()
 
@@ -121,15 +121,18 @@ ann, cent_data = load_resources()
 df_meteo = fetch_and_update_meteo()
 
 if df_meteo is not None:
-    # Predicción
+    # Predicción ANN
     X = df_meteo[["Juliano", "TMAX", "TMIN", "Prec"]].values
     emerrel, emerac = ann.predict(X)
-    df_meteo["EMERREL"] = pd.Series(emerrel).rolling(smooth_win, center=True).mean().fillna(emerrel)
-    df_meteo["EMERAC"] = emerac
     
+    # --- PROCESAMIENTO ROBUSTO DE EMERREL (Corrección TypeError) ---
+    s_emerrel = pd.Series(emerrel)
+    df_meteo["EMERREL"] = s_emerrel.rolling(window=smooth_win, center=True).mean().fillna(s_emerrel)
+    df_meteo["EMERAC"] = emerac
+    df_meteo["EMERAC_NORM"] = emerac / (emerac.max() if emerac.max() > 0 else 1)
+
     # --- A. MAPA SEMAFÓRICO (HEATMAP) ---
     st.subheader("🌡️ Intensidad de Emergencia Diaria")
-    # Escala de colores: Verde (Bajo) -> Amarillo (Medio) -> Rojo (Crítico)
     colorscale = [[0, "#dcfce7"], [0.4, "#16a34a"], [0.5, "#facc15"], [0.8, "#ef4444"], [1, "#b91c1c"]]
     fig_h = go.Figure(data=go.Heatmap(
         z=[df_meteo["EMERREL"]], x=df_meteo["Fecha"], y=["Intensidad"],
@@ -138,19 +141,19 @@ if df_meteo is not None:
     fig_h.update_layout(height=150, margin=dict(t=20, b=0, l=10, r=10))
     st.plotly_chart(fig_h, use_container_width=True)
 
-    # --- B. DINÁMICA DE EMERGENCIA RELATIVA (PULSOS) ---
+    # --- B. DINÁMICA DE PULSOS ---
     st.subheader("📈 Monitoreo de Pulsos de Emergencia")
     fig_m = go.Figure()
     fig_m.add_trace(go.Scatter(
         x=df_meteo["Fecha"], y=df_meteo["EMERREL"], 
-        fill='tozeroy', line_color='#15803d', name="Tasa de Emergencia"
+        fill='tozeroy', line_color='#15803d', name="Tasa Diaria"
     ))
     fig_m.add_hline(y=umbral_alerta, line_dash="dash", line_color="red", 
-                    annotation_text="Umbral de Alerta", annotation_position="top right")
+                    annotation_text="Umbral de Alerta")
     fig_m.update_layout(height=350, margin=dict(t=30, b=10), hovermode="x unified")
     st.plotly_chart(fig_m, use_container_width=True)
 
-    # --- C. DIAGNÓSTICO AVANZADO ---
+    # --- C. DIAGNÓSTICO AGRONÓMICO AVANZADO ---
     st.divider()
     vals = _compute_jd_percentiles(df_meteo["Juliano"], df_meteo["EMERAC"])
     
@@ -161,31 +164,33 @@ if df_meteo is not None:
         
         col1, col2 = st.columns([1, 2])
         with col1:
-            st.metric("Patrón Detectado", patron)
-            st.metric("JD50 (50% Emergencia)", f"Día {int(vals[1])}")
+            st.subheader(f"🟢 Patrón: {patron}")
+            st.metric("JD50 Estimado", f"Día {int(vals[1])}")
             
-            # Lógica de alerta rápida
-            if vals[1] < 120:
-                st.error("🚨 ALERTA: Patrón Temprano detectado. El pico de emergencia es inminente.")
+            # Análisis AAI Mixto
+            if patron == "Early":
+                st.error("🚨 ALERTA EARLY: Pico inminente. Priorizar residuales potentes en barbecho.")
             elif patron == "Extended":
-                st.warning("⚠️ PRECAUCIÓN: Emergencia prolongada. Se requiere solapamiento de residuales.")
+                st.warning("⚠️ ALERTA EXTENDED: Emergencia prolongada. Se requiere solapamiento (overlapping) de residuales.")
+            elif patron == "Late":
+                st.info("🔵 ALERTA LATE: Pico tardío. No agote los residuales demasiado pronto.")
             else:
-                st.success("✅ Patrón estable. Siga el monitoreo de pulsos para aplicaciones post-emergentes.")
+                st.success("✅ Patrón estable: Ajustar aplicaciones post-emergentes según pulsos observados.")
 
         with col2:
-            # Gráfico Radar de Percentiles
-            labels_radar = ["JD25", "JD50", "JD75", "JD95"]
-            angles = np.linspace(0, 2*np.pi, len(labels_radar), endpoint=False).tolist() + [0]
+            # Radar de Percentiles
             fig_rad = go.Figure()
             fig_rad.add_trace(go.Scatterpolar(
-                r=vals.tolist() + [vals[0]], theta=["JD25", "JD50", "JD75", "JD95", "JD25"],
+                r=vals.tolist() + [vals[0]], 
+                theta=["JD25", "JD50", "JD75", "JD95", "JD25"],
                 fill='toself', name='Campaña 2026', line_color='black'
             ))
             fig_rad.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 300])), 
-                                  showlegend=False, title="Radar de Percentiles (JD)")
+                                  title="Radar JD25–JD95")
             st.plotly_chart(fig_rad, use_container_width=True)
 
-    # Exportar datos
-    st.sidebar.download_button("📥 Descargar Reporte CSV", df_meteo.to_csv(index=False), "predweem_2026.csv")
+    # Descarga de datos
+    st.sidebar.download_button("📥 Descargar Reporte CSV", df_meteo.to_csv(index=False), "avefa_2026.csv")
+
 else:
-    st.warning("No se pudieron cargar datos meteorológicos.")
+    st.warning("Esperando datos de MeteoBahia o archivo CSV...")
