@@ -1,4 +1,3 @@
-# update_meteo.py
 import pandas as pd
 import requests
 import xml.etree.ElementTree as ET
@@ -17,15 +16,11 @@ def to_float(x):
         return None
 
 def fetch_meteobahia():
-    # Definimos un "User-Agent" para parecer un navegador normal
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
-    # Agregamos los headers a la petición
     r = requests.get(URL, headers=headers, timeout=20)
-    
-    # Esto ahora debería funcionar sin el error 403
     r.raise_for_status()
     root = ET.fromstring(r.content)
 
@@ -44,34 +39,40 @@ def fetch_meteobahia():
         })
 
     df = pd.DataFrame(rows).sort_values("Fecha")
+    
+    # --- CAMBIO AQUÍ: Cálculo del Día Juliano ---
+    df["Juliano"] = df["Fecha"].dt.dayofyear
+    # --------------------------------------------
+    
     return df
 
 def update_file():
     today = datetime.utcnow().date()
 
-    # 1) Antes del 01/01/2026 → NO HACER NADA
     if today < START.date():
         print("⏳ Antes del 01/01/2026 → no se actualiza meteo_daily.csv")
         return
 
-    # 2) EXACTAMENTE EL 01/01/2026 → BORRAR ARCHIVO
     if today == START.date():
         if OUT.exists():
             OUT.unlink()
             print("🆕 meteo_daily.csv reiniciado el 01/01/2026.")
 
-    # 3) Descargar datos nuevos
     df_new = fetch_meteobahia()
 
-    # 4) Si ya existe el archivo (post-reinicio) → concatenar
     if OUT.exists():
         df_old = pd.read_csv(OUT, parse_dates=["Fecha"])
+        # Concatenamos y aseguramos que el orden de columnas sea consistente
         df_all = pd.concat([df_old, df_new]).drop_duplicates("Fecha").sort_values("Fecha")
     else:
         df_all = df_new
 
+    # Reordenar columnas para que Juliano quede cerca de la Fecha (opcional)
+    cols = ["Fecha", "Juliano", "TMAX", "TMIN", "Prec"]
+    df_all = df_all[cols]
+
     df_all.to_csv(OUT, index=False)
-    print(f"[OK] Archivo actualizado: {len(df_all)} registros.")
+    print(f"[OK] Archivo actualizado: {len(df_all)} registros (Día Juliano incluido).")
 
 if __name__ == "__main__":
     update_file()
