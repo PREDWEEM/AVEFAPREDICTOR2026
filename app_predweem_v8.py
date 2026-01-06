@@ -153,42 +153,6 @@ if df_meteo is not None:
     fig_m.update_layout(height=350, margin=dict(t=30, b=10), hovermode="x unified")
     st.plotly_chart(fig_m, use_container_width=True)
 
-    # --- C. DIAGNÓSTICO AGRONÓMICO AVANZADO ---
-    st.divider()
-    vals = _compute_jd_percentiles(df_meteo["Juliano"], df_meteo["EMERAC"])
-    
-    if vals is not None:
-        C = cent_data["centroides"]
-        dists = np.linalg.norm(C[["JD25", "JD50", "JD75", "JD95"]].values - vals, axis=1)
-        patron = C.index[np.argmin(dists)]
-        
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            st.subheader(f"🟢 Patrón: {patron}")
-            st.metric("JD50 Estimado", f"Día {int(vals[1])}")
-            
-            # Análisis AAI Mixto
-            if patron == "Early":
-                st.error("🚨 ALERTA EARLY: Pico inminente. Priorizar residuales potentes en barbecho.")
-            elif patron == "Extended":
-                st.warning("⚠️ ALERTA EXTENDED: Emergencia prolongada. Se requiere solapamiento (overlapping) de residuales.")
-            elif patron == "Late":
-                st.info("🔵 ALERTA LATE: Pico tardío. No agote los residuales demasiado pronto.")
-            else:
-                st.success("✅ Patrón estable: Ajustar aplicaciones post-emergentes según pulsos observados.")
-
-        with col2:
-            # Radar de Percentiles
-            fig_rad = go.Figure()
-            fig_rad.add_trace(go.Scatterpolar(
-                r=vals.tolist() + [vals[0]], 
-                theta=["JD25", "JD50", "JD75", "JD95", "JD25"],
-                fill='toself', name='Campaña 2026', line_color='black'
-            ))
-            fig_rad.update_layout(polar=dict(radialaxis=dict(visible=True, range=[0, 300])), 
-                                  title="Radar JD25–JD95")
-            st.plotly_chart(fig_rad, use_container_width=True)
-
     # Descarga de datos
     st.sidebar.download_button("📥 Descargar Reporte CSV", df_meteo.to_csv(index=False), "avefa_2026.csv")
 
