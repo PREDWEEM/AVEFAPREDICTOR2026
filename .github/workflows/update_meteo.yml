@@ -54,4 +54,3 @@ jobs:
             git commit -m "Auto-update meteo_daily.csv ($(date -u +'%Y-%m-%d %H:%M UTC'))"
             git push
           fi
-
