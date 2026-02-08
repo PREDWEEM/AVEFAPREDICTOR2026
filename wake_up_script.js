@@ -4,7 +4,7 @@ const { chromium } = require('playwright');
   const browser = await chromium.launch();
   const page = await browser.newPage();
   
-  const url = 'https://appemergenciapy-evagabxskaw7cqvwex2d3k.streamlit.app/';
+  const url = 'https://apppredweemv8py-gfl8smqwmnkwhccwsaqvhd.streamlit.app/';
   
   console.log(`Visitando ${url}...`);
   await page.goto(url, { waitUntil: 'networkidle' });
