@@ -1,8 +1,8 @@
 # ===============================================================
-# 🌧️ PREDWEEM — AVEFA Pulsos: alerta semanal de emergencia de
-#    Avena fatua a partir de la lluvia ya registrada
+# 🌧️ PREDWEEM — AVEFA Pulsos: alerta semanal de flushes de
+#    Avena fatua (modelo de pulsos de lluvia + conteos de campo)
 # Modelo: Chantre et al. (Weed Research, enviado 2026)
-# Datos: meteo_daily.csv (Bordenave, actualizado por GitHub Actions)
+# Datos: meteo_daily.csv (Bordenave, SIGA + ECMWF, GitHub Actions)
 # ===============================================================
 
 from pathlib import Path
@@ -15,25 +15,39 @@ from plotly.subplots import make_subplots
 
 import avefa_pulsos as ap
 
-st.set_page_config(page_title="AVEFA Pulsos — alerta de emergencia", layout="wide", page_icon="🌧️")
+st.set_page_config(page_title="AVEFA Pulsos — alerta de flushes", layout="wide", page_icon="🌧️")
 
 BASE = Path(__file__).parent
 CSV_REPO = BASE / "meteo_daily.csv"
 PARAMS_FILE = BASE / "pulsos_params.json"
+ALERT_FILE = BASE / "alerta_params.json"
 TZ = "America/Argentina/Buenos_Aires"
 
-COLORS = {"alta": "#c2410c", "moderada": "#d97706", "baja": "#15803d",
-          "lluvia": "#2563eb", "modelo": "#0f766e", "clima": "#94a3b8"}
+COLORS = {"alta": "#c2410c", "recorrer": "#d97706", "baja": "#15803d",
+          "lluvia": "#2a78d6", "modelo": "#0f766e", "clima": "#94a3b8", "conteo": "#6b7280"}
+LEVEL_TEXT = {
+    "alta": "Alerta alta: flush probable. Recorrer el lote esta semana y prever el control.",
+    "recorrer": "Recorrer: probabilidad de flush por encima del umbral elegido.",
+    "baja": "Sin alerta: flush poco probable en los próximos 7 días.",
+}
 
 st.markdown("""
 <style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 .stAppDeployButton {display: none;}
-div[data-testid="stMetricValue"] {font-size: 1.9rem;}
+div[data-testid="stMetricValue"] {font-size: 1.8rem;}
 .alerta {padding: 0.9rem 1.1rem; border-radius: 0.6rem; margin: 0.4rem 0 1rem 0; color: white; font-size: 1.05rem;}
 </style>
 """, unsafe_allow_html=True)
+
+
+def fmt(x: float, nd: int = 0) -> str:
+    return f"{x:.{nd}f}".replace(".", ",")
+
+
+def today_local() -> pd.Timestamp:
+    return pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
 
 
 # ---------------------------------------------------------------
@@ -44,258 +58,249 @@ def load_repo_csv(mtime: float) -> pd.DataFrame:
     return ap.clean_meteo(pd.read_csv(CSV_REPO))
 
 
+@st.cache_data(ttl=3600)
+def source_summary(mtime: float) -> list[str]:
+    raw = pd.read_csv(CSV_REPO, usecols=lambda c: c in {"Fecha", "TipoDato"})
+    if "TipoDato" not in raw:
+        return []
+    raw["Fecha"] = pd.to_datetime(raw["Fecha"], errors="coerce")
+    labels = {"Observado": "Observado SIGA–INTA Bordenave", "Provisional": "Provisional ECMWF IFS",
+              "Pronostico": "Pronóstico ECMWF ENS (mediana)"}
+    out = []
+    for tipo, lab in labels.items():
+        f = raw.loc[raw["TipoDato"] == tipo, "Fecha"]
+        if len(f):
+            out.append(f"{lab}: {len(f)} días ({f.min():%d/%m} – {f.max():%d/%m})")
+    return out
+
+
 @st.cache_resource
-def load_params(mtime: float) -> ap.Params:
-    return ap.Params.load(PARAMS_FILE)
+def load_models(m1: float, m2: float):
+    return ap.Params.load(PARAMS_FILE), ap.AlertModel.load(ALERT_FILE)
 
 
-def today_local() -> pd.Timestamp:
-    return pd.Timestamp.now(tz=TZ).normalize().tz_localize(None)
-
-
-params = load_params(PARAMS_FILE.stat().st_mtime)
+params, alert = load_models(PARAMS_FILE.stat().st_mtime, ALERT_FILE.stat().st_mtime)
 
 # ---------------------------------------------------------------
 # Barra lateral
 # ---------------------------------------------------------------
 with st.sidebar:
-    st.header("Datos")
-    fuente = st.radio("Fuente meteorológica",
-                      ["Bordenave (meteo_daily.csv del repositorio)", "Subir un CSV propio"], index=0)
+    st.header("Clima")
+    fuente = st.radio("Fuente meteorológica", ["Estación INTA Bordenave (SIGA + ECMWF)", "Subir un CSV propio"], index=0)
     upload = None
+    corregir = True
     if fuente.startswith("Subir"):
         upload = st.file_uploader("CSV con columnas Fecha, TMAX, TMIN, Prec", type=["csv"])
-        st.caption("Datos diarios desde el 1 de enero de la campaña. Fecha en formato AAAA-MM-DD.")
-
+        corregir = st.checkbox("Es de la estación SIGA A872817 (aplicar corrección de temperatura)", value=False)
     try:
-        if upload is not None:
-            meteo = ap.clean_meteo(pd.read_csv(upload))
-        else:
-            meteo = load_repo_csv(CSV_REPO.stat().st_mtime)
+        meteo = ap.clean_meteo(pd.read_csv(upload)) if upload is not None else load_repo_csv(CSV_REPO.stat().st_mtime)
     except Exception as e:  # noqa: BLE001
         st.error(f"No se pudo leer el CSV: {e}")
         st.stop()
-
+    if corregir and params.correccion_temperatura:
+        meteo = ap.apply_temperature_correction(meteo, params.correccion_temperatura)
     first, last = meteo["Fecha"].min(), meteo["Fecha"].max()
+    if upload is None:
+        for line in source_summary(CSV_REPO.stat().st_mtime):
+            st.caption(line)
+
     default_emit = min(today_local(), last)
-    try:  # ?fecha=AAAA-MM-DD en la URL
+    try:
         qp = st.query_params.get("fecha")
         if qp:
             default_emit = min(max(pd.Timestamp(qp), first), last)
     except Exception:  # noqa: BLE001
         pass
-    emit = pd.Timestamp(st.date_input("Fecha de emisión del pronóstico", value=default_emit.date(),
+    emit = pd.Timestamp(st.date_input("Fecha de emisión", value=default_emit.date(),
                                       min_value=first.date(), max_value=last.date()))
-    st.caption("La lluvia posterior a esta fecha se ignora: el pronóstico usa solo la lluvia ya registrada. "
-               "La temperatura de los 7 días siguientes se toma del pronóstico del CSV o de la climatología.")
+
+    st.header("Conteos de campo")
+    st.caption("Plántulas por marco en cada fecha de conteo, contadas y retiradas semanalmente. "
+               "Solo importa la proporción entre fechas, así que vale cualquier tamaño de marco.")
+    up_c = st.file_uploader("Subir conteos (CSV: Fecha, Marco 1, Marco 2, …)", type=["csv"], key="up_conteos")
+    if up_c is not None:
+        st.session_state["conteos"] = pd.read_csv(up_c)
+    base = st.session_state.get("conteos", pd.DataFrame({"Fecha": [None] * 3, "Marco 1": [None] * 3,
+                                                          "Marco 2": [None] * 3, "Marco 3": [None] * 3}))
+    base = base.copy()
+    base["Fecha"] = ap.parse_dates(base["Fecha"]).dt.date
+    edited = st.data_editor(base, num_rows="dynamic", width="stretch", key="editor_conteos",
+                            column_config={"Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY")})
+    counts = ap.clean_counts(edited)
+    if not counts.empty:
+        st.download_button("📥 Guardar conteos (CSV)", edited.to_csv(index=False), "conteos_avefa.csv")
 
     st.header("Alerta")
-    umbral = st.select_slider("Umbral de alerta (% de la emergencia de la campaña en 7 días)",
-                              options=[2.0, 2.5, 3.0, 4.0, 5.0], value=3.0)
-    st.caption("3 %: visitas en ~33 % de las semanas, detecta ~61 % de los flushes. "
-               "2 %: visitas en ~57 % de las semanas, detecta ~82 % (validación 1977–2015).")
-
-    st.header("Conteos de campo (opcional)")
-    usar_conteos = st.checkbox("Corregir con la proporción ya emergida")
-    F0_user = None
-    if usar_conteos:
-        F0_user = st.slider("Proporción estimada ya emergida a la fecha de emisión (%)", 0, 99, 50) / 100
-        st.caption("Con conteos el pronóstico mejora (AUC 0,77 vs 0,75), pero exige estimar el total de la campaña.")
+    umbral = st.select_slider("Recorrer el lote si la probabilidad de flush supera",
+                              options=[0.15, 0.20, 0.25, 0.30], value=0.25, format_func=lambda v: f"{v:.0%}")
+    st.caption({0.15: "Visitas en ~48 % de las semanas; detecta ~83 % de los flushes.",
+                0.20: "Visitas en ~40 % de las semanas; detecta ~78 % de los flushes.",
+                0.25: "Visitas en ~34 % de las semanas; detecta ~72 % de los flushes.",
+                0.30: "Visitas en ~27 % de las semanas; detecta ~67 % de los flushes."}[umbral]
+               + " Con conteos semanales, validación 1977–2015 dejando una campaña afuera.")
 
 # ---------------------------------------------------------------
-# Simulación
+# Modelo de pulsos
 # ---------------------------------------------------------------
-season_year = emit.year  # la campaña va del 1 de febrero en adelante
+season_year = emit.year
 meteo_ext = ap.extend_with_climatology(meteo, emit + pd.Timedelta(days=8))
 sim = ap.simulate(meteo_ext, params, rain_cutoff=emit, season_year=season_year)
 days = sim.days
 fc = ap.rolling_forecast(sim, horizon=7)
 fc = fc[fc["Fecha"] <= emit].copy()
 
-if F0_user is not None and not fc.empty:
-    i = fc.index[-1]
-    t = days.index[days["Fecha"] == emit][0]
-    dH = (sim.B[t + 7] - sim.B[t]) + sum(sim.P[r, t + 7] - sim.P[r, t] for r, u in enumerate(sim.rain_idx) if u <= t)
-    fc.loc[i, "F_emitido"] = F0_user
-    fc.loc[i, "dF_7d"] = (1 - F0_user) * (1 - np.exp(-dH))
-
-thr = umbral / 100
-fc["alerta"] = fc["dF_7d"].apply(lambda v: ap.classify_alert(v, thr_low=thr * 2 / 3, thr_high=thr))
-
-# ---------------------------------------------------------------
-# Encabezado
-# ---------------------------------------------------------------
-st.title("🌧️ AVEFA Pulsos — alerta semanal de emergencia de *Avena fatua*")
-PS = params.summary()
-
-
-def fmt(x: float, nd: int = 0) -> str:
-    """Número con coma decimal."""
-    return f"{x:.{nd}f}".replace(".", ",")
-
-
-st.caption(f"Cada lluvia dispara emergencia con un rezago fijo en tiempo térmico de suelo "
-           f"(mediana {PS['mediana']:.0f} °C d sobre {params.Tb:g} °C). "
-           "Como ese rezago supera una semana casi todo el año, la lluvia ya caída alcanza para anticipar los próximos 7 días.")
-
-if params.provisional:
-    st.warning("**Parámetros provisorios.** Reconstruidos a partir de los valores publicados en el manuscrito "
-               "(rezago, multiplicador de sequedad, respuesta estacional, Fig. 4), no del ajuste original. "
-               "Reemplazar `pulsos_params.json` por el vector ajustado a 1977–2015.", icon="⚠️")
-else:
-    st.caption(f"Parámetros: {params.source} Ver detalle al pie.")
+st.title("🌧️ AVEFA Pulsos — alerta semanal de flushes de *Avena fatua*")
+st.caption("Combina el modelo de pulsos de lluvia (cada lluvia dispara emergencia con un rezago en tiempo térmico de suelo) "
+           "con los conteos de campo, que indican si la campaña viene adelantada o atrasada.")
 
 if fc.empty:
     st.info(f"La campaña {season_year} empieza el 1 de febrero. Todavía no hay pronósticos para la fecha elegida.")
     st.stop()
 
-now = fc.iloc[-1]
-nivel = now["alerta"]
-texto = {
-    "alta": "Alerta alta: se espera un flush. Programar una recorrida del lote esta semana.",
-    "moderada": "Alerta moderada: emergencia por encima de lo habitual. Recorrer si hay tratamientos pendientes.",
-    "baja": "Sin alerta: emergencia baja esperada en los próximos 7 días.",
-}[nivel]
-st.markdown(f"<div class='alerta' style='background:{COLORS[nivel]}'><b>{emit:%d/%m/%Y}</b> · {texto}</div>",
-            unsafe_allow_html=True)
-if now["F_emitido"] >= 0.97:
-    st.info("La campaña está prácticamente terminada según la simulación (≥ 97 % emergido). "
-            "Para revisar la temporada, elegí una fecha anterior en la barra lateral.")
 
-# próximos flushes de lluvias recientes
+def level(p: float) -> str:
+    return "alta" if p >= 0.40 else ("recorrer" if p >= umbral else "baja")
+
+
+# probabilidad solo con pulsos, todos los días
+fc["prob_pulsos"] = [alert.probability(v) for v in fc["dF_7d"]]
+pulso_now = float(fc["dF_7d"].iloc[-1])
+sig = ap.counts_signal(counts, emit) if not counts.empty else None
+usa_conteos = sig is not None and sig["dias_desde"] <= 7
+prob = alert.probability(pulso_now, sig["g1"] if usa_conteos else None)
+nivel = level(prob)
+
+# historial de la alerta combinada en cada fecha de conteo
+hist = []
+for _, r in counts[(counts["Fecha"] <= emit) & (counts["Fecha"] >= pd.Timestamp(season_year, 2, 1))].iterrows():
+    s = ap.counts_signal(counts, r["Fecha"])
+    p_row = fc.loc[fc["Fecha"] == r["Fecha"], "dF_7d"]
+    if s is None or p_row.empty:
+        continue
+    hist.append({"Fecha": r["Fecha"], "prob": alert.probability(float(p_row.iloc[0]), s["g1"]), "g1": s["g1"]})
+hist = pd.DataFrame(hist)
+
+st.markdown(f"<div class='alerta' style='background:{COLORS[nivel]}'><b>{emit:%d/%m/%Y}</b> · "
+            f"Probabilidad de flush en los próximos 7 días: <b>{prob:.0%}</b>. {LEVEL_TEXT[nivel]}</div>",
+            unsafe_allow_html=True)
+if not usa_conteos:
+    if sig is None:
+        st.info("Sin conteos cargados: la alerta usa solo el modelo de pulsos (menos precisa). "
+                "Con conteos semanales la detección de flushes sube de ~63 % a ~72 % con el mismo esfuerzo de recorrida.")
+    else:
+        st.warning(f"El último conteo es del {sig['fecha']:%d/%m} ({sig['dias_desde']} días antes de la emisión): "
+                   "la alerta usa solo el modelo de pulsos. Cargá el conteo de esta semana para combinarlos.")
+if fc["F_emitido"].iloc[-1] >= 0.97:
+    st.info("Según la simulación ya emergió ≥ 97 % de la campaña. Para revisar la temporada, elegí una fecha anterior.")
+
 ev = sim.events.copy()
 ev = ev[(ev["Fecha"] <= emit) & (ev["Fecha"] > emit - pd.Timedelta(days=60))]
 F_at = days.set_index("Fecha")["F"]
-ev["emergencia_esperada"] = [
-    (1 - F_at.get(f - pd.Timedelta(days=1), 0.0)) * (1 - np.exp(-h)) for f, h in zip(ev["Fecha"], ev["hazard_total"])
-]
+ev["emergencia_esperada"] = [(1 - F_at.get(f - pd.Timedelta(days=1), 0.0)) * (1 - np.exp(-h))
+                             for f, h in zip(ev["Fecha"], ev["hazard_total"])]
 proximos = ev[(ev["fecha_mediana_flush"] > emit) & (ev["emergencia_esperada"] >= 0.01)]
 
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Emergencia esperada en 7 días", f"{100 * now['dF_7d']:.1f} %",
-          help="Porcentaje del total de la campaña. Referencia sin lluvias: "
-               f"{100 * now['dF_7d_base']:.1f} %.")
-c2.metric("Emergencia acumulada estimada", f"{100 * now['F_emitido']:.0f} %",
-          help="Simulada solo con clima desde el 1 de febrero, o la ingresada si se usan conteos.")
-s_now = float(days.loc[days["Fecha"] == emit, "S"].iloc[0])
-c3.metric("Agua en el suelo", f"{100 * s_now / params.W:.0f} %",
-          help=f"Balde de {fmt(params.W, 1)} mm del modelo de suelo. La lluvia sobre suelo seco dispara hasta "
-               f"{fmt(PS['sequedad'], 1)} veces más emergencia.")
+c1.metric("Probabilidad de flush (7 días)", f"{prob:.0%}",
+          help="Flush: semana con ≥ 5 % de la emergencia de la campaña. Tasa histórica: "
+               f"{alert.tasa_base:.0%} de las semanas.")
+c2.metric("Emergencia esperada por lluvias", f"{fmt(100 * pulso_now, 1)} %",
+          help="Pronóstico del modelo de pulsos para los próximos 7 días, en % de la campaña, con la lluvia ya registrada.")
+c3.metric("Última semana / total contado",
+          f"{sig['g1']:.0%}" if sig is not None else "—",
+          help="Fracción de todo lo contado en la campaña que salió en el último intervalo. "
+               "Alta = la emergencia viene activa." + (f" Conteo del {sig['fecha']:%d/%m}." if sig else ""))
 if not proximos.empty:
     nxt = proximos.sort_values("fecha_mediana_flush").iloc[0]
-    c4.metric("Próximo flush (mediana)", f"{nxt['fecha_mediana_flush']:%d/%m}",
+    c4.metric("Próximo flush por lluvia (mediana)", f"{nxt['fecha_mediana_flush']:%d/%m}",
               help=f"Por la lluvia del {nxt['Fecha']:%d/%m} ({nxt['Prec']:.0f} mm).")
 else:
-    c4.metric("Próximo flush (mediana)", "—", help="Ninguna lluvia reciente con respuesta esperada ≥ 1 %.")
+    c4.metric("Próximo flush por lluvia (mediana)", "—", help="Ninguna lluvia reciente con respuesta esperada ≥ 1 %.")
 
 # ---------------------------------------------------------------
-# Gráfico 1: alerta a lo largo de la campaña
+# Gráfico: probabilidad, conteos y lluvia (paneles con eje propio)
 # ---------------------------------------------------------------
-st.subheader("Pronóstico a 7 días emitido cada día")
+st.subheader("Campaña: probabilidad de flush, conteos y lluvia")
 camp = days[(days["Fecha"] >= pd.Timestamp(season_year, 2, 1)) & (days["Fecha"] <= emit)]
-fig = make_subplots(specs=[[{"secondary_y": True}]])
-fig.add_trace(go.Bar(x=camp["Fecha"], y=camp["Prec"], name="Lluvia (mm)", marker_color=COLORS["lluvia"],
-                     opacity=0.35), secondary_y=True)
-fig.add_trace(go.Scatter(x=fc["Fecha"], y=100 * fc["dF_7d_base"], name="Sin lluvias (base)",
-                         line=dict(color=COLORS["clima"], dash="dot")), secondary_y=False)
-fig.add_trace(go.Scatter(x=fc["Fecha"], y=100 * fc["dF_7d"], name="Pronóstico 7 días",
-                         line=dict(color=COLORS["modelo"], width=2.5), fill="tozeroy",
-                         fillcolor="rgba(15,118,110,0.12)"), secondary_y=False)
-alto = fc[fc["alerta"] == "alta"]
-fig.add_trace(go.Scatter(x=alto["Fecha"], y=100 * alto["dF_7d"], mode="markers", name="Alerta alta",
-                         marker=dict(color=COLORS["alta"], size=6)), secondary_y=False)
-fig.add_hline(y=umbral, line_dash="dash", line_color=COLORS["alta"],
-              annotation_text=f"umbral {umbral:g} %", annotation_position="top left")
-fig.update_yaxes(title_text="% de la campaña en 7 días", secondary_y=False, rangemode="tozero")
-fig.update_yaxes(title_text="Lluvia (mm)", secondary_y=True, showgrid=False, rangemode="tozero")
-fig.update_layout(height=380, hovermode="x unified", margin=dict(t=20, b=10, l=10, r=10),
-                  legend=dict(orientation="h", y=1.08))
+cc = counts[(counts["Fecha"] >= pd.Timestamp(season_year, 1, 1)) & (counts["Fecha"] <= emit)]
+fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.27, 0.23], vertical_spacing=0.05)
+fig.add_trace(go.Scatter(x=fc["Fecha"], y=100 * fc["prob_pulsos"], name="Solo pulsos (diaria)",
+                         line=dict(color=COLORS["modelo"], width=2)), row=1, col=1)
+if not hist.empty:
+    fig.add_trace(go.Scatter(x=hist["Fecha"], y=100 * hist["prob"], name="Pulsos + conteos", mode="lines+markers",
+                             line=dict(color=COLORS["alta"], width=2), marker=dict(size=8)), row=1, col=1)
+fig.add_hline(y=100 * umbral, line_dash="dash", line_color=COLORS["recorrer"], row=1, col=1,
+              annotation_text=f"recorrer ≥ {umbral:.0%}", annotation_position="top left")
+fig.add_trace(go.Bar(x=cc["Fecha"], y=cc["media"], name="Conteo (plántulas por marco)",
+                     marker_color=COLORS["conteo"]), row=2, col=1)
+fig.add_trace(go.Bar(x=camp["Fecha"], y=camp["Prec"], name="Lluvia (mm)", marker_color=COLORS["lluvia"]), row=3, col=1)
+fig.update_yaxes(title_text="Prob. flush (%)", range=[0, 100], row=1, col=1)
+fig.update_yaxes(title_text="Plántulas", rangemode="tozero", row=2, col=1)
+fig.update_yaxes(title_text="Lluvia (mm)", rangemode="tozero", row=3, col=1)
+fig.update_layout(height=560, hovermode="x unified", margin=dict(t=20, b=10, l=10, r=10),
+                  legend=dict(orientation="h", y=1.06), bargap=0.15)
 st.plotly_chart(fig, width="stretch")
 
-# ---------------------------------------------------------------
-# Gráfico 2 y tabla
-# ---------------------------------------------------------------
 left, right = st.columns([3, 2])
 with left:
     st.subheader("Emergencia acumulada")
-    camp_all = days[days["Fecha"] >= pd.Timestamp(season_year, 2, 1)]
-    camp_all = camp_all[camp_all["Fecha"] <= max(emit, camp_all["Fecha"].min())]
+    camp_all = days[(days["Fecha"] >= pd.Timestamp(season_year, 2, 1)) & (days["Fecha"] <= emit)]
     fig2 = go.Figure()
-    clim = ap.climatological_curve(pd.DatetimeIndex(camp_all["Fecha"]))
-    fig2.add_trace(go.Scatter(x=camp_all["Fecha"], y=100 * clim, name="Curva media 1977–2015",
-                              line=dict(color=COLORS["clima"], dash="dash")))
+    fig2.add_trace(go.Scatter(x=camp_all["Fecha"], y=100 * ap.climatological_curve(pd.DatetimeIndex(camp_all["Fecha"])),
+                              name="Curva media 1977–2015", line=dict(color=COLORS["clima"], dash="dash")))
     fig2.add_trace(go.Scatter(x=camp_all["Fecha"], y=100 * camp_all["F"], name="Simulada con el clima de la campaña",
                               line=dict(color=COLORS["modelo"], width=2.5)))
-    fig2.update_layout(height=340, yaxis_title="% de la campaña", yaxis_range=[0, 100],
-                       hovermode="x unified", margin=dict(t=10, b=10, l=10, r=10),
-                       legend=dict(orientation="h", y=1.1))
+    fig2.update_layout(height=320, yaxis_title="% de la campaña", yaxis_range=[0, 100], hovermode="x unified",
+                       margin=dict(t=10, b=10, l=10, r=10), legend=dict(orientation="h", y=1.12))
     st.plotly_chart(fig2, width="stretch")
-    st.caption("La curva de la campaña es orientativa: en validación no predijo la fecha del 50 % mejor que la curva media. "
-               "Su uso es la alerta de la semana, no el pronóstico de toda la campaña.")
-
+    st.caption("Orientativa: la simulación solo con clima no anticipa si la campaña viene adelantada o atrasada; "
+               "para eso están los conteos.")
 with right:
     st.subheader("Lluvias de los últimos 60 días")
     if ev.empty:
         st.write("Sin lluvias registradas en los últimos 60 días.")
     else:
         tab = pd.DataFrame({
-            "Fecha": ev["Fecha"].dt.strftime("%d/%m"),
-            "mm": ev["Prec"].round(1),
+            "Fecha": ev["Fecha"].dt.strftime("%d/%m"), "mm": ev["Prec"].round(1),
             "Suelo": (100 * ev["S_prev"] / params.W).round(0).astype(int).astype(str) + " %",
             "Emerg.": (100 * ev["emergencia_esperada"]).round(1).astype(str) + " %",
-            "Flush": ev["fecha_mediana_flush"].dt.strftime("%d/%m") + "–"
-                     + ev["fecha_p90_flush"].dt.strftime("%d/%m").fillna("…"),
+            "Flush": ev["fecha_mediana_flush"].dt.strftime("%d/%m") + "–" + ev["fecha_p90_flush"].dt.strftime("%d/%m").fillna("…"),
         }).iloc[::-1]
-        st.dataframe(tab, hide_index=True, width="stretch", height=330)
-        st.caption("Suelo: agua en el suelo antes de la lluvia. Emerg.: emergencia total esperada, en % de la campaña. "
-                   "Flush: fechas en que se acumula la mediana y el percentil 90 del rezago.")
+        st.dataframe(tab, hide_index=True, width="stretch", height=300)
+        st.caption("Suelo: agua antes de la lluvia. Emerg.: emergencia total esperada (% de la campaña). "
+                   "Flush: mediana y percentil 90 del rezago.")
 
-# ---------------------------------------------------------------
-# Información del modelo
-# ---------------------------------------------------------------
-with st.expander("Cómo funciona el modelo y sus límites"):
-    clim_days = ap.soil_model(ap.climatological_temps(pd.date_range("2001-01-01", "2001-12-31")), params)
-    C_clim = clim_days["C_TT"].to_numpy()
-
-    def lag_days(month: int) -> int:
-        u = pd.Timestamp(2001, month, 15).dayofyear - 1
-        return int(np.searchsorted(C_clim, C_clim[u] + PS["mediana"]) - u)
-
+with st.expander("Cómo funciona y qué precisión tiene"):
+    PS = params.summary()
     st.markdown(f"""
-**Modelo.** La emergencia de cada día es una tasa estacional de base más la suma de los pulsos de cada lluvia
-de los 60 días previos. Cada pulso tiene tres componentes:
+**Dos señales.**
+1. *Modelo de pulsos*: cada lluvia dispara emergencia con un rezago gamma en tiempo térmico de suelo (mediana
+   {PS['mediana']:.0f} °C d sobre {params.Tb:g} °C), una respuesta que sube de febrero a julio ({fmt(PS['julio_febrero'], 1)} veces)
+   y hasta {fmt(PS['sequedad'], 1)} veces mayor si la lluvia cae sobre suelo seco. Usa solo la lluvia ya registrada.
+2. *Conteos*: la fracción de todo lo contado que salió en el último intervalo. Si la emergencia viene activa, es probable
+   que siga; esto capta si la campaña viene adelantada o atrasada, que el clima solo no anticipa.
 
-- **Cuándo**: un rezago gamma en tiempo térmico de suelo a 5 cm sobre {params.Tb:g} °C (mediana {PS['mediana']:.0f} °C d,
-  percentil 90 {PS['p90']:.0f} °C d). Con temperaturas medias son unos {lag_days(2)} días en febrero y {lag_days(7)} en julio.
-- **Cuánto según la fecha**: la respuesta por unidad de lluvia sube de febrero a principios de julio
-  ({fmt(PS['julio_febrero'], 1)} veces, máximo en el día {PS['dia_pico']:.0f}) y baja en primavera,
-  a medida que el banco sale de la dormición.
-- **Cuánto según el suelo**: la lluvia que rehumedece un suelo seco dispara hasta {fmt(PS['sequedad'], 1)} veces más
-  emergencia que sobre suelo lleno. No hay umbral mínimo de lluvia; la respuesta crece con el logaritmo del agua agregada al suelo.
+Cada señal se expresa como percentil de su distribución en 1977–2015 y la suma se convierte en probabilidad de flush
+(semana con ≥ 5 % de la campaña) con una regresión logística.
 
-**Desempeño publicado (pronóstico a 7 días solo con clima).** Reduce 15 % el error de la curva media y sube el AUC para detectar
-semanas con flush de 0,60 a 0,75 (validación dejando un año afuera, 38 campañas); en cinco campañas independientes, AUC 0,62 → 0,78.
+**Precisión** (validación dejando una campaña afuera, 1977–2015, 1163 semanas; y campañas independientes 2018, 2022 y 2026 con la estación SIGA):
 
-**Límites.**
-- Predice proporciones de la emergencia de la campaña, no plantas por m².
-- Un sitio (Bordenave), suelo sin labranza. En suelo removido identifica flushes pero no mejora la cantidad: recalibrar antes de usarlo así.
-- A 14 días pierde buena parte de la habilidad y a 21 días ninguna.
-- No predice bien la fecha del 50 % ni la curva de toda la campaña.
-- Cerca del 28 % de los flushes ocurre sin lluvia reciente (sobre todo julio–agosto) y el modelo no los anticipa.
+| | AUC 1977–2015 | Detección con visitas en 1/3 de las semanas | AUC 2018–2026 |
+|---|---|---|---|
+| Solo pulsos | 0,76 | ~63–66 % | 0,68 |
+| Pulsos + conteos | **0,81** | **~72 %** | **0,76** |
+
+La probabilidad está calibrada: cuando dice 25–30 %, el flush ocurrió en ~25 % de las semanas; cuando dice ~50 %, en ~55 %.
+
+**Clima.** Las temperaturas de SIGA se corrigen por mes a la escala de la estación convencional (NH0343) con la que se
+calibró el modelo, usando ERA5 como referencia común.
+
+**Límites.** Un sitio (Bordenave) y suelo sin labranza. Requiere conteos semanales en marcos fijos, con retiro de plántulas.
+No anticipa flushes sin lluvia reciente (como el del 9–16 de marzo de 2026) hasta que aparecen en los conteos.
 """)
-    st.markdown("**Vector en uso frente al manuscrito**")
-    st.dataframe(pd.DataFrame({
-        "Valor": ["Rezago, mediana (°C d)", "Rezago, moda (°C d)", "Rezago, percentil 90 (°C d)",
-                  "Multiplicador de sequedad", "Respuesta julio / febrero", "Día de máxima respuesta"],
-        "Manuscrito": ["139", "111", "260", "4,2", "18–20", "190–194"],
-        "Vector en uso": [fmt(PS["mediana"]), fmt(PS["moda"]), fmt(PS["p90"]), fmt(PS["sequedad"], 2),
-                          fmt(PS["julio_febrero"], 1), fmt(PS["dia_pico"])],
-    }), hide_index=True, width="stretch")
-    st.caption(f"Parámetros: {params.source}")
+    st.caption(f"Parámetros del modelo de pulsos: {params.source}")
 
-st.sidebar.download_button(
-    "📥 Descargar pronósticos (CSV)",
-    fc.assign(dF_7d_pct=100 * fc["dF_7d"], F_pct=100 * fc["F_emitido"]).to_csv(index=False),
-    f"avefa_pulsos_{emit:%Y%m%d}.csv",
-)
-st.sidebar.caption(f"Datos: {first:%d/%m/%Y} – {last:%d/%m/%Y} · {len(meteo)} días")
+st.sidebar.download_button("📥 Descargar pronósticos (CSV)",
+                           fc.assign(prob_pulsos=fc["prob_pulsos"], dF_7d_pct=100 * fc["dF_7d"]).to_csv(index=False),
+                           f"avefa_pulsos_{emit:%Y%m%d}.csv")
+st.sidebar.caption(f"Clima: {first:%d/%m/%Y} – {last:%d/%m/%Y} · {len(meteo)} días")
