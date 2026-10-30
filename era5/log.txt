@@ -1,9 +1,44 @@
-error era5 1982 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=90)
-error era5 1987 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=90)
-error era5 1992 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=90)
-error era5 1996 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=90)
-error era5 2001 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=90)
-error era5 2005 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=90)
-error era5 2010 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=90)
-error era5 2015 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=90)
-error era5 2019 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=90)
+ok 1977
+ok 1978
+ok 1979
+ok 1980
+ok 1981
+error era5 1982 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=150)
+ok 1982
+ok 1983
+ok 1984
+ok 1985
+error era5 1986 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=150)
+ok 1986
+ok 1987
+ok 1988
+ok 1989
+error era5 1990 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=150)
+ok 1990
+ok 1991
+ok 1992
+ok 1993
+ok 1994
+error era5 1995 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=150)
+ok 1995
+ok 1996
+ok 1997
+ok 1998
+ok 1999
+error era5 2000 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=150)
+ok 2000
+ok 2001
+ok 2002
+ok 2003
+ok 2004
+error era5 2005 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=150)
+ok 2005
+ok 2006
+ok 2007
+ok 2008
+ok 2009
+error era5 2010 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=150)
+ok 2010
+ok 2011
+ok 2012
+ok 2013
