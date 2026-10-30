@@ -1,4 +1,3 @@
-streamlit
 pandas
 numpy
 plotly
@@ -6,3 +5,5 @@ openpyxl
 joblib
 scikit-learn
 matplotlib
+scipy
+streamlit>=1.50

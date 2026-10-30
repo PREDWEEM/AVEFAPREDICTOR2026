@@ -1,0 +1,41 @@
+{
+  "b0": -7.5726757490298,
+  "b1": -2.1429564823247214,
+  "b2": -2.899516479392936,
+  "b3": -1.5796143700189067,
+  "b4": -1.7637829701071857,
+  "alpha0": -5.003575625672835,
+  "alpha1": -0.3222768725589903,
+  "alpha2": -1.6066400151720723,
+  "delta": 1.4350845252893227,
+  "k_shape": 3.6663658667968946,
+  "theta_scale": 41.629695827656356,
+  "Tb": 5.0,
+  "ema_alpha": 0.426,
+  "ts_a0": 3.39,
+  "ts_a1": -0.66,
+  "W": 75.6,
+  "k_loss": 0.0327,
+  "provisional": true,
+  "source": "Reconstruido de valores derivados del manuscrito (rezago 111/139 °C d, pico día 194, cociente 20, sequedad 4,2, Fig. 4) y curva climatológica de Bordenave. Reemplazar por el ajuste real de 1977–2015.",
+  "_diagnostico": {
+    "kernel_p90_reconstruido": 259.502655108922,
+    "kernel_p90_publicado": 260.0,
+    "curva_media_en_anclas": {
+      "03-15": 0.081,
+      "05-15": 0.38,
+      "07-15": 0.67,
+      "09-15": 0.9,
+      "10-31": 0.975
+    },
+    "curva_objetivo": {
+      "03-15": 0.07,
+      "05-15": 0.38,
+      "07-15": 0.67,
+      "09-15": 0.9,
+      "10-31": 0.975
+    },
+    "fraccion_hazard_por_pulsos": 0.601,
+    "n_campañas_sinteticas": 80
+  }
+}
