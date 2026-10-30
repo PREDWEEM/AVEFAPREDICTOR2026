@@ -447,3 +447,110 @@ def counts_signal(counts: pd.DataFrame, t: pd.Timestamp) -> dict | None:
     ultimo = float(c["media"].iloc[-1])
     return {"fecha": c["Fecha"].iloc[-1], "g1": ultimo / acum if acum > 0 else 0.0,
             "acumulado": acum, "ultimo": ultimo, "dias_desde": int((t - c["Fecha"].iloc[-1]).days)}
+
+
+# ---------------------------------------------------------------------------
+# Lectura de planillas de conteo (Excel o CSV) con formato libre
+# ---------------------------------------------------------------------------
+_SKIP_HEADERS = ("promedio", "media", "%", "acum", "total", "diario", "prom", "emerg")
+
+
+def _is_date(v) -> bool:
+    if isinstance(v, (pd.Timestamp, np.datetime64)) or hasattr(v, "year"):
+        return not pd.isna(v)
+    if isinstance(v, str):
+        return bool(pd.notna(parse_dates(pd.Series([v])).iloc[0]))
+    return False
+
+
+def read_counts_table(raw: pd.DataFrame) -> pd.DataFrame:
+    """Extrae Fecha + marcos de una hoja con títulos, bloques laterales u otras tablas debajo.
+
+    Busca la fila de encabezado que contiene "Fecha"; toma las columnas contiguas de la derecha con
+    números (descarta promedios, porcentajes y acumulados, salvo que sean la única columna) y lee
+    las filas hasta la primera que no tenga fecha.
+    """
+    g = raw.reset_index(drop=True)
+    g.columns = range(g.shape[1])
+    hdr = None
+    for i in range(min(len(g), 30)):
+        for j in range(g.shape[1]):
+            if str(g.iat[i, j]).strip().lower() in ("fecha", "fechas", "date"):
+                hdr = (i, j)
+                break
+        if hdr:
+            break
+    if hdr is None:  # sin encabezado: primera columna con fechas
+        for j in range(g.shape[1]):
+            if g[j].map(_is_date).sum() >= 2:
+                first = int(np.argmax(g[j].map(_is_date).to_numpy()))
+                hdr = (first - 1, j)
+                break
+    if hdr is None:
+        raise ValueError("No se encontró una columna de fechas.")
+    i0, jd = hdr
+    body = g.iloc[i0 + 1:]
+    # filas: hasta la primera sin fecha después de haber empezado
+    rows, started = [], False
+    for k, v in body[jd].items():
+        if _is_date(v):
+            rows.append(k); started = True
+        elif started and (pd.isna(v) or str(v).strip() == ""):
+            # permite filas vacías sueltas, corta si la siguiente tampoco es fecha
+            nxt = body[jd].get(k + 1)
+            if not _is_date(nxt):
+                break
+        elif started:
+            break
+    body = body.loc[rows]
+    heads = g.iloc[i0] if i0 >= 0 else pd.Series([""] * g.shape[1])
+    marcos, resumen = [], []
+    for j in range(jd + 1, g.shape[1]):
+        col = pd.to_numeric(body[j], errors="coerce")
+        h = str(heads.get(j, "")).strip().lower()
+        if col.notna().sum() == 0 and (h in ("", "nan")):
+            if marcos or resumen:
+                break  # columna vacía: fin del bloque
+            continue
+        if any(s in h for s in _SKIP_HEADERS):
+            resumen.append(j)
+            if marcos:
+                break
+            continue
+        if col.notna().sum() > 0:
+            marcos.append(j)
+    use = marcos if marcos else resumen[:1]
+    if not use:
+        raise ValueError("No se encontraron columnas de conteo a la derecha de la fecha.")
+    out = pd.DataFrame({"Fecha": parse_dates(body[jd].astype(object).map(
+        lambda v: v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else v))})
+    seen = set()
+    for n, j in enumerate(use, 1):
+        name = str(heads.get(j, "")).strip()
+        name = f"Marco {n}" if name.lower() in ("", "nan") or name.replace(".0", "").isdigit() else name
+        vals = pd.to_numeric(body[j], errors="coerce")
+        v = vals.dropna()
+        acumulada = len(v) >= 5 and (v.diff().dropna() >= 0).all() and v.iloc[-1] > 3 * max(v.diff().max(), 1e-9) / 2
+        proporcion = len(v) and v.max() <= 1.0 and len(use) > 1
+        if name in seen or acumulada or proporcion:
+            continue  # encabezado repetido, columna acumulada o proporción
+        seen.add(name)
+        out[name] = vals.values
+    return out.dropna(subset=["Fecha"]).reset_index(drop=True)
+
+
+def read_counts_file(file, sheet=None) -> pd.DataFrame:
+    """Lee un CSV o Excel (.xlsx/.xls) de conteos en formato libre."""
+    name = getattr(file, "name", str(file)).lower()
+    if name.endswith((".xlsx", ".xlsm", ".xls")):
+        raw = pd.read_excel(file, sheet_name=sheet if sheet is not None else 0, header=None)
+    else:
+        raw = pd.read_csv(file, header=None, sep=None, engine="python")
+    return read_counts_table(raw)
+
+
+def excel_sheets(file) -> list[str]:
+    try:
+        return list(pd.ExcelFile(file).sheet_names)
+    except Exception:  # noqa: BLE001
+        return []

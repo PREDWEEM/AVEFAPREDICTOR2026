@@ -117,9 +117,29 @@ with st.sidebar:
     st.header("Conteos de campo")
     st.caption("Plántulas por marco en cada fecha de conteo, contadas y retiradas semanalmente. "
                "Solo importa la proporción entre fechas, así que vale cualquier tamaño de marco.")
-    up_c = st.file_uploader("Subir conteos (CSV: Fecha, Marco 1, Marco 2, …)", type=["csv"], key="up_conteos")
+    up_c = st.file_uploader("Subir planilla de conteos (Excel o CSV)", type=["xlsx", "xls", "xlsm", "csv"],
+                            key="up_conteos",
+                            help="Una fila por fecha de conteo y una columna por marco. Se busca la fila con "
+                                 "el encabezado «Fecha»; títulos, promedios, acumulados y porcentajes se ignoran.")
     if up_c is not None:
-        st.session_state["conteos"] = pd.read_csv(up_c)
+        hoja = None
+        if up_c.name.lower().endswith((".xlsx", ".xls", ".xlsm")):
+            hojas = ap.excel_sheets(up_c)
+            if len(hojas) > 1:
+                hoja = st.selectbox("Hoja", hojas, key="hoja_conteos")
+            up_c.seek(0)
+        try:
+            leido = ap.read_counts_file(up_c, hoja)
+            cols = [c for c in leido.columns if c != "Fecha"]
+            elegidas = st.multiselect("Columnas de marcos a usar", cols, default=cols, key="cols_conteos",
+                                      help="Si la planilla tiene varios tratamientos (por ejemplo CR y SR), "
+                                           "dejá solo los marcos del lote que querés evaluar.")
+            if elegidas:
+                st.session_state["conteos"] = leido[["Fecha"] + elegidas]
+                st.caption(f"Leídas {leido['Fecha'].notna().sum()} fechas "
+                           f"({leido['Fecha'].min():%d/%m/%Y} – {leido['Fecha'].max():%d/%m/%Y}).")
+        except Exception as e:  # noqa: BLE001
+            st.error(f"No se pudo leer la planilla: {e}")
     base = st.session_state.get("conteos", pd.DataFrame({"Fecha": [None] * 3, "Marco 1": [None] * 3,
                                                           "Marco 2": [None] * 3, "Marco 3": [None] * 3}))
     base = base.copy()
@@ -127,6 +147,9 @@ with st.sidebar:
     edited = st.data_editor(base, num_rows="dynamic", width="stretch", key="editor_conteos",
                             column_config={"Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY")})
     counts = ap.clean_counts(edited)
+    if not counts.empty and (counts["Fecha"].max() < first or counts["Fecha"].min() > last):
+        st.warning(f"Los conteos ({counts['Fecha'].min():%d/%m/%Y} – {counts['Fecha'].max():%d/%m/%Y}) no coinciden "
+                   f"con el clima disponible ({first:%d/%m/%Y} – {last:%d/%m/%Y}); no se usan en la alerta.")
     if not counts.empty:
         st.download_button("📥 Guardar conteos (CSV)", edited.to_csv(index=False), "conteos_avefa.csv")
 
