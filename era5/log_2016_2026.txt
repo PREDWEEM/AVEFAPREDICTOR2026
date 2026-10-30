@@ -1,0 +1,14 @@
+ok 2016
+ok 2017
+ok 2018
+ok 2019
+ok 2020
+error era5 2021 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=150)
+ok 2021
+ok 2022
+ok 2023
+error era5 2024 HTTPSConnectionPool(host='archive-api.open-meteo.com', port=443): Read timed out. (read timeout=150)
+ok 2024
+ok 2025
+ok 2026
+ok era5 3649
