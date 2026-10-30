@@ -63,6 +63,10 @@ class Params:
     # núcleo gamma del rezago (2), en °C d sobre Tb
     k_shape: float
     theta_scale: float
+    # inhibición por suelo caliente: A(u) · exp(−γ · max(Ts7(u) − Tc, 0)),
+    # Ts7 = Ts media de los 7 días desde la lluvia (γ = 0 desactiva el término)
+    heat_gamma: float = 0.0
+    heat_Tc: float = 20.0
     Tb: float = 5.0
     # modelo de suelo (Apéndice S1)
     ema_alpha: float = 0.426
@@ -88,6 +92,7 @@ class Params:
             "sequedad": float(np.exp(self.delta)),
             "dia_pico": float((np.arctan2(self.alpha1, self.alpha2) % (2 * np.pi)) / OMEGA),
             "julio_febrero": float(A(196) / A(46)),
+            "inhibicion_por_grado": float(1 - np.exp(-self.heat_gamma)),
         }
 
     def kernel_quantiles(self) -> dict:
@@ -187,9 +192,31 @@ def baseline_rate(doy: np.ndarray, p: Params) -> np.ndarray:
     return np.exp(p.b0 + p.b1 * np.sin(w) + p.b2 * np.cos(w) + p.b3 * np.sin(2 * w) + p.b4 * np.cos(2 * w))
 
 
-def response_A(doy: np.ndarray, s_prev: np.ndarray, p: Params) -> np.ndarray:
+def response_A(doy: np.ndarray, s_prev: np.ndarray, p: Params, ts7: np.ndarray | None = None) -> np.ndarray:
     w = OMEGA * doy
-    return np.exp(p.alpha0 + p.alpha1 * np.sin(w) + p.alpha2 * np.cos(w) + p.delta * (1 - s_prev / p.W))
+    la = p.alpha0 + p.alpha1 * np.sin(w) + p.alpha2 * np.cos(w) + p.delta * (1 - s_prev / p.W)
+    if ts7 is not None and p.heat_gamma:
+        la = la - p.heat_gamma * np.clip(ts7 - p.heat_Tc, 0, None)
+    return np.exp(la)
+
+
+def forward_mean(x: np.ndarray, days: int = 7) -> np.ndarray:
+    """Media de x[i .. i+days−1] (recortada al final de la serie)."""
+    n = len(x)
+    cs = np.r_[0.0, np.cumsum(x)]
+    hi = np.minimum(np.arange(n) + days, n)
+    return (cs[hi] - cs[:n]) / (hi - np.arange(n))
+
+
+def apply_temperature_correction(df: pd.DataFrame, corr: dict | None) -> pd.DataFrame:
+    """Suma la corrección mensual (°C) a TMAX y TMIN; corr = {"tmax": [12], "tmin": [12]}."""
+    if not corr:
+        return df
+    out = df.copy()
+    m = pd.DatetimeIndex(out["Fecha"]).month.to_numpy() - 1
+    out["TMAX"] = out["TMAX"] + np.asarray(corr["tmax"])[m]
+    out["TMIN"] = out["TMIN"] + np.asarray(corr["tmin"])[m]
+    return out
 
 
 def seasonal_response_curve(p: Params) -> pd.DataFrame:
@@ -240,7 +267,9 @@ def simulate(df_meteo: pd.DataFrame, p: Params, rain_cutoff: pd.Timestamp | None
     s_prev = d["S_prev"].to_numpy()
     dW = np.minimum(rain, p.W - s_prev)
     x = np.log1p(np.clip(dW, 0, None))
-    A = response_A(doy, s_prev, p)
+    ts7 = forward_mean(d["Ts"].to_numpy())
+    d["Ts7_siguiente"] = ts7
+    A = response_A(doy, s_prev, p, ts7)
 
     g = gamma_dist(a=p.k_shape, scale=p.theta_scale)
     P = np.zeros((len(rain_idx), n))
@@ -266,6 +295,8 @@ def simulate(df_meteo: pd.DataFrame, p: Params, rain_cutoff: pd.Timestamp | None
     ev["agua_agregada_mm"] = dW[rain_idx]
     ev["respuesta_A"] = A[rain_idx]
     ev["multiplicador_sequedad"] = np.exp(p.delta * (1 - s_prev[rain_idx] / p.W))
+    ev["Ts7_siguiente"] = ts7[rain_idx]
+    ev["multiplicador_calor"] = np.exp(-p.heat_gamma * np.clip(ts7[rain_idx] - p.heat_Tc, 0, None))
     ev["hazard_total"] = A[rain_idx] * x[rain_idx]
     q = p.kernel_quantiles()
     ev["fecha_mediana_flush"] = [_date_at_tt(dates, C, u, q["mediana"]) for u in rain_idx]
@@ -331,9 +362,10 @@ def classify_alert(dF: float, thr_low: float = 0.02, thr_high: float = 0.03) -> 
     return "baja"
 
 
-def single_rain_response(p: Params, doy: int, mm: float, s_prev_frac: float, remaining: float) -> float:
+def single_rain_response(p: Params, doy: int, mm: float, s_prev_frac: float, remaining: float,
+                         ts7: float | None = None) -> float:
     """Emergencia total esperada (fracción de la campaña) para una lluvia aislada."""
     s_prev = s_prev_frac * p.W
     x = np.log1p(min(mm, p.W - s_prev))
-    A = response_A(np.array([doy]), np.array([s_prev]), p)[0]
+    A = response_A(np.array([doy]), np.array([s_prev]), p, None if ts7 is None else np.array([ts7]))[0]
     return remaining * (1 - np.exp(-A * x))
