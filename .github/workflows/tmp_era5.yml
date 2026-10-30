@@ -18,37 +18,41 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install requests pandas
       - name: Descargar ERA5 y ERA5-Land diarios
+        continue-on-error: true
         run: |
-          python - <<'PY'
+          mkdir -p era5
+          python - <<'PY' 2>&1 | tee era5/log.txt
           import time, requests, pandas as pd
-          from pathlib import Path
           out = []
-          puntos = {"NH0343": (-37.85, -63.02), "A872817": (-37.75, -63.083332)}
+          lat, lon = -37.85, -63.02
           for modelo in ["era5", "era5_land"]:
-              for est, (lat, lon) in puntos.items():
-                  for a, b in [("1976-11-01", "1996-12-31"), ("1997-01-01", "2016-12-31"), ("2017-01-01", "2026-10-28")]:
-                      p = dict(latitude=lat, longitude=lon, start_date=a, end_date=b, models=modelo,
-                               daily="temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum",
-                               timezone="America/Argentina/Buenos_Aires")
-                      for k in range(5):
-                          r = requests.get("https://archive-api.open-meteo.com/v1/archive", params=p, timeout=120)
-                          if r.status_code == 200:
-                              break
-                          time.sleep(20 * (k + 1))
-                      r.raise_for_status()
-                      j = r.json()
-                      d = pd.DataFrame(j["daily"]); d["modelo"] = modelo; d["punto"] = est
-                      d["lat_grilla"] = j.get("latitude"); d["lon_grilla"] = j.get("longitude")
-                      out.append(d); time.sleep(3)
-          D = pd.concat(out)
-          Path("era5").mkdir(exist_ok=True)
-          D.to_csv("era5/era5_bordenave.csv", index=False)
-          print(D.groupby(["modelo", "punto"]).agg(n=("time", "size"), lat=("lat_grilla", "first"), lon=("lon_grilla", "first")))
+              for y in range(1977, 2027):
+                  a, b = f"{y-1 if y == 1977 else y}-{'11' if y == 1977 else '01'}-01", (f"{y}-12-31" if y < 2026 else "2026-10-28")
+                  p = dict(latitude=lat, longitude=lon, start_date=a, end_date=b, models=modelo,
+                           daily="temperature_2m_max,temperature_2m_min,precipitation_sum",
+                           timezone="America/Argentina/Buenos_Aires")
+                  for k in range(6):
+                      try:
+                          r = requests.get("https://archive-api.open-meteo.com/v1/archive", params=p, timeout=90)
+                      except Exception as e:
+                          print("error", modelo, y, e, flush=True); time.sleep(30); continue
+                      if r.status_code == 200:
+                          break
+                      print("HTTP", r.status_code, modelo, y, r.text[:200], flush=True)
+                      time.sleep(65 if r.status_code == 429 else 15)
+                  if r.status_code != 200:
+                      continue
+                  j = r.json(); d = pd.DataFrame(j["daily"]); d["modelo"] = modelo
+                  d["lat_grilla"] = j.get("latitude"); d["lon_grilla"] = j.get("longitude")
+                  out.append(d); time.sleep(1.5)
+              pd.concat(out).to_csv("era5/era5_bordenave.csv", index=False)
+              print("ok", modelo, sum(len(x) for x in out), flush=True)
           PY
       - name: Guardar
+        if: always()
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add era5/era5_bordenave.csv
-          git commit -m "ERA5 Bordenave (temporal)"
+          git add era5/ || true
+          git commit -m "ERA5 Bordenave (temporal)" || exit 0
           git push origin HEAD:tmp-era5-desfase
