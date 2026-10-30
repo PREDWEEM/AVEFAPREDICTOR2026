@@ -44,6 +44,24 @@ def load_repo_csv(mtime: float) -> pd.DataFrame:
     return ap.clean_meteo(pd.read_csv(CSV_REPO))
 
 
+@st.cache_data(ttl=3600)
+def source_summary(mtime: float) -> list[str]:
+    """Resumen de fuentes de meteo_daily.csv (SIGA observado, ECMWF provisional, ECMWF ENS P50)."""
+    raw = pd.read_csv(CSV_REPO, usecols=lambda c: c in {"Fecha", "TipoDato"})
+    if "TipoDato" not in raw:
+        return []
+    raw["Fecha"] = pd.to_datetime(raw["Fecha"], errors="coerce")
+    out = []
+    labels = {"Observado": "Observado SIGA–INTA Bordenave",
+              "Provisional": "Provisional ECMWF IFS (hasta que SIGA publique)",
+              "Pronostico": "Pronóstico ECMWF ENS, mediana"}
+    for tipo, lab in labels.items():
+        f = raw.loc[raw["TipoDato"] == tipo, "Fecha"]
+        if len(f):
+            out.append(f"{lab}: {len(f)} días ({f.min():%d/%m} – {f.max():%d/%m})")
+    return out
+
+
 @st.cache_resource
 def load_params(mtime: float) -> ap.Params:
     return ap.Params.load(PARAMS_FILE)
@@ -61,7 +79,7 @@ params = load_params(PARAMS_FILE.stat().st_mtime)
 with st.sidebar:
     st.header("Datos")
     fuente = st.radio("Fuente meteorológica",
-                      ["Bordenave (meteo_daily.csv del repositorio)", "Subir un CSV propio"], index=0)
+                      ["Estación INTA Bordenave (SIGA + ECMWF)", "Subir un CSV propio"], index=0)
     upload = None
     if fuente.startswith("Subir"):
         upload = st.file_uploader("CSV con columnas Fecha, TMAX, TMIN, Prec", type=["csv"])
@@ -77,6 +95,9 @@ with st.sidebar:
         st.stop()
 
     first, last = meteo["Fecha"].min(), meteo["Fecha"].max()
+    if upload is None:
+        for line in source_summary(CSV_REPO.stat().st_mtime):
+            st.caption(line)
     default_emit = min(today_local(), last)
     try:  # ?fecha=AAAA-MM-DD en la URL
         qp = st.query_params.get("fecha")

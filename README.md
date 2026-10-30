@@ -1,7 +1,13 @@
 # AVEFAPREDICTOR2026
 
 Predictores de emergencia de *Avena fatua* para Bordenave (Buenos Aires), en Streamlit.
-`meteo_daily.csv` se actualiza todos los días con GitHub Actions (`update_meteo.py`, MeteoBahía) y lo usan ambas apps.
+`meteo_daily.csv` lo usan ambas apps. Se actualiza dos veces por día con GitHub Actions (`actualizar_meteo_bordenave.py`, igual que en LOLIUM_BOR2026), con esta jerarquía de fuentes:
+
+1. **SIGA–INTA Bordenave (estación A872817)**: observado, prioritario y definitivo.
+2. **ECMWF IFS histórico**: completa provisionalmente las fechas vencidas que SIGA todavía no publicó (`TipoDato=Provisional`); se reemplaza cuando SIGA las publica.
+3. **ECMWF IFS ENS 0,25°**: pronóstico de hoy a 6 días, con la mediana del ensamble (P50) como valor operativo.
+
+La campaña se define con `CAMPANIA_START` y `CAMPANIA_END` en `.github/workflows/actualizar_meteo_bordenave.yml` (hoy 2026-01-01 a 2026-12-31); cambiarlas al empezar 2027. `A872817.xls` es el respaldo local si SIGA no responde.
 
 | App | Archivo principal | Modelo |
 |---|---|---|

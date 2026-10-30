@@ -55,7 +55,7 @@ mid = v["inicio"] + (v["fin"] - v["inicio"]) / 2
 a2.plot(mid, 100 * v["pred_clima"], "-o", color=BLUE, lw=2, ms=6, mec=SURF, mew=1.2, label="Pronóstico solo con clima")
 a2.plot(mid, 100 * v["pred_conteos"], "-o", color=ORANGE, lw=2, ms=6, mec=SURF, mew=1.2, label="Pronóstico con conteos")
 a2.axhline(3, color=INK2, lw=1, ls=":")
-a2.text(pd.Timestamp("2026-05-24"), 3.25, "umbral 3 %", ha="center", va="bottom", fontsize=8.5, color=INK2)
+a2.text(pd.Timestamp("2026-02-03"), 3.25, "umbral 3 %", ha="left", va="bottom", fontsize=8.5, color=INK2)
 from matplotlib.patches import Patch
 h, l = a2.get_legend_handles_labels()
 h.append(Patch(color="#d3d2cd")); l.append("Observada por intervalo")
@@ -73,7 +73,7 @@ a2.set_title(f"(b) Intervalo siguiente a cada conteo, con la lluvia registrada h
 # (c) lluvia
 a3.bar(d.loc[m, "Fecha"], d.loc[m, "Prec"], width=0.8, color=BLUE, alpha=0.55)
 a3.set_ylabel("Lluvia (mm)")
-a3.set_title("(c) Lluvia diaria (meteo_daily.csv, MeteoBahía)", loc="left", fontsize=10, color=INK)
+a3.set_title("(c) Lluvia diaria, estación SIGA–INTA Bordenave (4–10 jun: ECMWF provisional)", loc="left", fontsize=10, color=INK)
 a3.xaxis.set_major_locator(mdates.MonthLocator())
 MESES = ["", "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"]
 a3.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: MESES[mdates.num2date(x).month]))

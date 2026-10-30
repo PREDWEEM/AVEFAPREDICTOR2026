@@ -2,7 +2,7 @@
 Validación del modelo de pulsos con la campaña 2026 (sin remoción, Bordenave).
 
 Datos:  data/emergencia_2026_SR.csv  (conteos por marco; media por m²)
-Clima:  meteo_daily.csv              (MeteoBahía, el mismo que usa la app)
+Clima:  meteo_daily.csv              (SIGA–INTA Bordenave + ECMWF, el mismo que usa la app)
 
 Se evalúa, como en la Sección 2.5 del manuscrito:
   1. Curva acumulada simulada solo con clima desde el 1 de febrero (RMSE y
