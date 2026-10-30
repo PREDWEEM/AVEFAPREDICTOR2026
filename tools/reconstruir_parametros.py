@@ -17,8 +17,8 @@ Este script las invierte:
                     climatológica (7 % a mediados de marzo, 38 % mayo, 67 % julio,
                     90 % septiembre; Bordenave 1977–2015)
 
-Reemplazar pulsos_params.json por los parámetros del ajuste real en cuanto
-estén disponibles (y poner "provisional": false).
+El resultado se guarda en pulsos_params_reconstruidos.json, solo como
+referencia. La app usa pulsos_params.json, que tiene el vector ajustado.
 """
 
 import json
@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import avefa_pulsos as ap  # noqa: E402
 
-OUT = ROOT / "pulsos_params.json"
+OUT = ROOT / "pulsos_params_reconstruidos.json"
 
 # --- 1. núcleo gamma -------------------------------------------------------
 MODE, MEDIAN, P90_PUB = 111.0, 139.0, 260.0

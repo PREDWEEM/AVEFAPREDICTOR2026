@@ -19,7 +19,8 @@ Alerta semanal de flushes: cuánto de la emergencia de la campaña se espera en 
 Archivos:
 
 - `avefa_pulsos.py`: modelo de suelo (Apéndice S1), Ecuación 1 en forma diaria, pronóstico rodante a 7 días.
-- `pulsos_params.json`: parámetros. **Hoy son provisorios** (`"provisional": true`), reconstruidos con `tools/reconstruir_parametros.py` a partir de los valores derivados del manuscrito. Reemplazarlos por el vector ajustado a 1977–2015 y poner `"provisional": false` (desaparece el aviso de la app).
+- `pulsos_params.json`: vector θ de 11 parámetros ajustado por mínimos cuadrados no lineales a los intervalos de 1977–2015 con una reimplementación en Python (no es el vector del código original del manuscrito). La forma y la escala del núcleo gamma se guardan ya exponenciadas (`k_shape = exp θ₁₀`, `theta_scale = exp θ₁₁`). Si `"provisional": true`, la app muestra un aviso.
+- `pulsos_params_reconstruidos.json`: vector alternativo reconstruido con `tools/reconstruir_parametros.py` a partir de los valores derivados publicados; queda como referencia.
 - `app_pulsos.py`: interfaz. Admite `?fecha=AAAA-MM-DD` en la URL y la carga de un CSV propio (`Fecha, TMAX, TMIN, Prec`).
 
 Uso local:

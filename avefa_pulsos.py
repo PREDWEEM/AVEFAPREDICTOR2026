@@ -80,6 +80,16 @@ class Params:
         fields = {k: v for k, v in raw.items() if k in cls.__dataclass_fields__}
         return cls(**fields)
 
+    def summary(self) -> dict:
+        """Valores derivados con lectura biológica directa."""
+        A = lambda d: np.exp(self.alpha1 * np.sin(OMEGA * d) + self.alpha2 * np.cos(OMEGA * d))  # noqa: E731
+        return {
+            **self.kernel_quantiles(),
+            "sequedad": float(np.exp(self.delta)),
+            "dia_pico": float((np.arctan2(self.alpha1, self.alpha2) % (2 * np.pi)) / OMEGA),
+            "julio_febrero": float(A(196) / A(46)),
+        }
+
     def kernel_quantiles(self) -> dict:
         g = gamma_dist(a=self.k_shape, scale=self.theta_scale)
         return {

@@ -126,13 +126,24 @@ fc["alerta"] = fc["dF_7d"].apply(lambda v: ap.classify_alert(v, thr_low=thr * 2 
 # Encabezado
 # ---------------------------------------------------------------
 st.title("🌧️ AVEFA Pulsos — alerta semanal de emergencia de *Avena fatua*")
-st.caption("Cada lluvia dispara emergencia con un rezago fijo en tiempo térmico de suelo (mediana 139 °C d sobre 5 °C). "
+PS = params.summary()
+
+
+def fmt(x: float, nd: int = 0) -> str:
+    """Número con coma decimal."""
+    return f"{x:.{nd}f}".replace(".", ",")
+
+
+st.caption(f"Cada lluvia dispara emergencia con un rezago fijo en tiempo térmico de suelo "
+           f"(mediana {PS['mediana']:.0f} °C d sobre {params.Tb:g} °C). "
            "Como ese rezago supera una semana casi todo el año, la lluvia ya caída alcanza para anticipar los próximos 7 días.")
 
 if params.provisional:
     st.warning("**Parámetros provisorios.** Reconstruidos a partir de los valores publicados en el manuscrito "
                "(rezago, multiplicador de sequedad, respuesta estacional, Fig. 4), no del ajuste original. "
                "Reemplazar `pulsos_params.json` por el vector ajustado a 1977–2015.", icon="⚠️")
+else:
+    st.caption(f"Parámetros: {params.source} Ver detalle al pie.")
 
 if fc.empty:
     st.info(f"La campaña {season_year} empieza el 1 de febrero. Todavía no hay pronósticos para la fecha elegida.")
@@ -168,7 +179,8 @@ c2.metric("Emergencia acumulada estimada", f"{100 * now['F_emitido']:.0f} %",
           help="Simulada solo con clima desde el 1 de febrero, o la ingresada si se usan conteos.")
 s_now = float(days.loc[days["Fecha"] == emit, "S"].iloc[0])
 c3.metric("Agua en el suelo", f"{100 * s_now / params.W:.0f} %",
-          help="Balde de 75,6 mm del modelo de suelo. La lluvia sobre suelo seco dispara hasta 4,2 veces más emergencia.")
+          help=f"Balde de {fmt(params.W, 1)} mm del modelo de suelo. La lluvia sobre suelo seco dispara hasta "
+               f"{fmt(PS['sequedad'], 1)} veces más emergencia.")
 if not proximos.empty:
     nxt = proximos.sort_values("fecha_mediana_flush").iloc[0]
     c4.metric("Próximo flush (mediana)", f"{nxt['fecha_mediana_flush']:%d/%m}",
@@ -242,17 +254,24 @@ with right:
 # Información del modelo
 # ---------------------------------------------------------------
 with st.expander("Cómo funciona el modelo y sus límites"):
-    q = params.kernel_quantiles()
+    clim_days = ap.soil_model(ap.climatological_temps(pd.date_range("2001-01-01", "2001-12-31")), params)
+    C_clim = clim_days["C_TT"].to_numpy()
+
+    def lag_days(month: int) -> int:
+        u = pd.Timestamp(2001, month, 15).dayofyear - 1
+        return int(np.searchsorted(C_clim, C_clim[u] + PS["mediana"]) - u)
+
     st.markdown(f"""
 **Modelo.** La emergencia de cada día es una tasa estacional de base más la suma de los pulsos de cada lluvia
 de los 60 días previos. Cada pulso tiene tres componentes:
 
-- **Cuándo**: un rezago gamma en tiempo térmico de suelo a 5 cm sobre {params.Tb:g} °C (mediana {q['mediana']:.0f} °C d,
-  percentil 90 {q['p90']:.0f} °C d). Son unos 7 días en febrero y 28 en julio.
-- **Cuánto según la fecha**: la respuesta por unidad de lluvia sube de febrero a principios de julio (unas 20 veces) y baja en primavera,
+- **Cuándo**: un rezago gamma en tiempo térmico de suelo a 5 cm sobre {params.Tb:g} °C (mediana {PS['mediana']:.0f} °C d,
+  percentil 90 {PS['p90']:.0f} °C d). Con temperaturas medias son unos {lag_days(2)} días en febrero y {lag_days(7)} en julio.
+- **Cuánto según la fecha**: la respuesta por unidad de lluvia sube de febrero a principios de julio
+  ({fmt(PS['julio_febrero'], 1)} veces, máximo en el día {PS['dia_pico']:.0f}) y baja en primavera,
   a medida que el banco sale de la dormición.
-- **Cuánto según el suelo**: la lluvia que rehumedece un suelo seco dispara hasta 4,2 veces más emergencia que sobre suelo lleno.
-  No hay umbral mínimo de lluvia; la respuesta crece con el logaritmo del agua agregada al suelo.
+- **Cuánto según el suelo**: la lluvia que rehumedece un suelo seco dispara hasta {fmt(PS['sequedad'], 1)} veces más
+  emergencia que sobre suelo lleno. No hay umbral mínimo de lluvia; la respuesta crece con el logaritmo del agua agregada al suelo.
 
 **Desempeño publicado (pronóstico a 7 días solo con clima).** Reduce 15 % el error de la curva media y sube el AUC para detectar
 semanas con flush de 0,60 a 0,75 (validación dejando un año afuera, 38 campañas); en cinco campañas independientes, AUC 0,62 → 0,78.
@@ -264,6 +283,14 @@ semanas con flush de 0,60 a 0,75 (validación dejando un año afuera, 38 campañ
 - No predice bien la fecha del 50 % ni la curva de toda la campaña.
 - Cerca del 28 % de los flushes ocurre sin lluvia reciente (sobre todo julio–agosto) y el modelo no los anticipa.
 """)
+    st.markdown("**Vector en uso frente al manuscrito**")
+    st.dataframe(pd.DataFrame({
+        "Valor": ["Rezago, mediana (°C d)", "Rezago, moda (°C d)", "Rezago, percentil 90 (°C d)",
+                  "Multiplicador de sequedad", "Respuesta julio / febrero", "Día de máxima respuesta"],
+        "Manuscrito": ["139", "111", "260", "4,2", "18–20", "190–194"],
+        "Vector en uso": [fmt(PS["mediana"]), fmt(PS["moda"]), fmt(PS["p90"]), fmt(PS["sequedad"], 2),
+                          fmt(PS["julio_febrero"], 1), fmt(PS["dia_pico"])],
+    }), hide_index=True, width="stretch")
     st.caption(f"Parámetros: {params.source}")
 
 st.sidebar.download_button(
