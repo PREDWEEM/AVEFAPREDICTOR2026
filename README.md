@@ -33,3 +33,7 @@ streamlit run app_pulsos.py
 Despliegue en Streamlit Community Cloud: *Create app* → este repositorio → rama `main` → archivo principal `app_pulsos.py`.
 
 Límites: predice proporciones de la campaña (no pl/m²); un sitio, suelo sin labranza; pierde habilidad a 14–21 días; no predice la fecha del 50 % mejor que la curva media.
+
+### Validación 2026
+
+`python tools/validar_2026.py` compara el modelo con los conteos de 2026 sin remoción (`data/emergencia_2026_SR.csv`) usando el mismo `meteo_daily.csv` de la app; `tools/figura_validacion_2026.py` genera `docs/validacion_2026.png`.
