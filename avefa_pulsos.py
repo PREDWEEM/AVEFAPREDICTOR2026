@@ -74,6 +74,8 @@ class Params:
     ts_a1: float = -0.66
     W: float = 75.6
     k_loss: float = 0.0327
+    # corrección mensual de temperatura para la estación SIGA (lleva a la escala de NH0343)
+    correccion_temperatura: dict | None = None
     # metadatos
     provisional: bool = True
     source: str = ""
@@ -369,3 +371,79 @@ def single_rain_response(p: Params, doy: int, mm: float, s_prev_frac: float, rem
     x = np.log1p(min(mm, p.W - s_prev))
     A = response_A(np.array([doy]), np.array([s_prev]), p, None if ts7 is None else np.array([ts7]))[0]
     return remaining * (1 - np.exp(-A * x))
+
+
+# ---------------------------------------------------------------------------
+# Alerta combinada: modelo de pulsos + conteos de campo
+# ---------------------------------------------------------------------------
+@dataclass
+class AlertModel:
+    """Probabilidad de flush (≥ 5 % de la campaña) en la semana siguiente.
+
+    Suma de dos percentiles respecto de 1977–2015: el pronóstico del modelo de pulsos a 7 días y la
+    fracción de lo ya emergido que emergió en el último intervalo (persistencia). Calibrada con
+    regresión logística. Sin conteos recientes usa solo el pronóstico de pulsos.
+    """
+    pulso_ref: np.ndarray
+    g1_ref: np.ndarray
+    coef: float
+    intercept: float
+    solo_coef: float
+    solo_intercept: float
+    tasa_base: float
+
+    @classmethod
+    def load(cls, path: str | Path) -> "AlertModel":
+        a = json.loads(Path(path).read_text(encoding="utf-8"))
+        return cls(np.sort(np.array(a["pulso_ref"])), np.sort(np.array(a["g1_ref"])), a["logit_coef"],
+                   a["logit_intercept"], a["solo_pulsos_coef"], a["solo_pulsos_intercept"], a["tasa_base"])
+
+    @staticmethod
+    def _ecdf(ref: np.ndarray, x: float) -> float:
+        return float(np.searchsorted(ref, x, side="right") / len(ref))
+
+    def probability(self, pulso: float, g1: float | None = None) -> float:
+        sp = self._ecdf(self.pulso_ref, pulso)
+        if g1 is None:
+            z = self.solo_intercept + self.solo_coef * sp
+        else:
+            z = self.intercept + self.coef * (sp + self._ecdf(self.g1_ref, g1))
+        return float(1 / (1 + np.exp(-z)))
+
+
+def parse_dates(s: pd.Series) -> pd.Series:
+    """AAAA-MM-DD como ISO; el resto (DD/MM/AAAA) con el día primero."""
+    s = pd.Series(s)
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return s
+    txt = s.astype(str).str.strip()
+    iso = txt.str.match(r"^\d{4}-\d{1,2}-\d{1,2}")
+    out = pd.to_datetime(txt.where(iso), errors="coerce", format="mixed", dayfirst=False)
+    out[~iso] = pd.to_datetime(txt.where(~iso), errors="coerce", format="mixed", dayfirst=True)[~iso]
+    return out
+
+
+def clean_counts(df: pd.DataFrame) -> pd.DataFrame:
+    """Conteos por fecha: columnas Fecha y uno o más marcos (plantas por marco). Devuelve Fecha y media."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Fecha", "media"])
+    d = df.copy()
+    d.columns = [str(c).strip() for c in d.columns]
+    fcol = next((c for c in d.columns if c.lower() in ("fecha", "date")), d.columns[0])
+    d["Fecha"] = parse_dates(d[fcol])
+    marcos = [c for c in d.columns if c not in (fcol, "Fecha")]
+    vals = d[marcos].apply(pd.to_numeric, errors="coerce")
+    d["media"] = vals.mean(axis=1, skipna=True)
+    d = d.dropna(subset=["Fecha", "media"]).sort_values("Fecha").drop_duplicates("Fecha", keep="last")
+    return d[["Fecha", "media"]].reset_index(drop=True)
+
+
+def counts_signal(counts: pd.DataFrame, t: pd.Timestamp) -> dict | None:
+    """Fracción de lo emergido hasta el último conteo (≤ t) que emergió en ese último intervalo."""
+    c = counts[counts["Fecha"] <= t]
+    if c.empty:
+        return None
+    acum = float(c["media"].sum())
+    ultimo = float(c["media"].iloc[-1])
+    return {"fecha": c["Fecha"].iloc[-1], "g1": ultimo / acum if acum > 0 else 0.0,
+            "acumulado": acum, "ultimo": ultimo, "dias_desde": int((t - c["Fecha"].iloc[-1]).days)}
