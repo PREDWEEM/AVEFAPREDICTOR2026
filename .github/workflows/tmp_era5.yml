@@ -10,7 +10,7 @@ permissions:
 jobs:
   era5:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,7 +25,7 @@ jobs:
           import time, requests, pandas as pd
           out = []
           lat, lon = -37.85, -63.02
-          for modelo in ["era5", "era5_land"]:
+          for modelo in ["era5"]:
               for y in range(1977, 2027):
                   a, b = f"{y-1 if y == 1977 else y}-{'11' if y == 1977 else '01'}-01", (f"{y}-12-31" if y < 2026 else "2026-10-28")
                   p = dict(latitude=lat, longitude=lon, start_date=a, end_date=b, models=modelo,
@@ -33,7 +33,7 @@ jobs:
                            timezone="America/Argentina/Buenos_Aires")
                   for k in range(6):
                       try:
-                          r = requests.get("https://archive-api.open-meteo.com/v1/archive", params=p, timeout=90)
+                          r = requests.get("https://archive-api.open-meteo.com/v1/archive", params=p, timeout=150)
                       except Exception as e:
                           print("error", modelo, y, e, flush=True); time.sleep(30); continue
                       if r.status_code == 200:
@@ -44,7 +44,8 @@ jobs:
                       continue
                   j = r.json(); d = pd.DataFrame(j["daily"]); d["modelo"] = modelo
                   d["lat_grilla"] = j.get("latitude"); d["lon_grilla"] = j.get("longitude")
-                  out.append(d); time.sleep(1.5)
+                  out.append(d); pd.concat(out).to_csv("era5/era5_bordenave.csv", index=False)
+                  print("ok", y, flush=True); time.sleep(1.5)
               pd.concat(out).to_csv("era5/era5_bordenave.csv", index=False)
               print("ok", modelo, sum(len(x) for x in out), flush=True)
           PY
