@@ -1,10 +1,10 @@
 {
-  "ejecucion_utc": "2026-10-30T22:36:31+00:00",
+  "ejecucion_utc": "2026-10-31T15:50:39+00:00",
   "sitio": "Bordenave / INTA",
   "latitud": -37.85,
   "longitud": -63.02,
   "estado_siga": "SIGA_remoto",
-  "ultima_observacion_siga": "2026-10-29",
+  "ultima_observacion_siga": "2026-10-30",
   "huecos_siga": [
     "2026-06-04",
     "2026-06-05",
@@ -21,8 +21,8 @@
   "fecha_fin_campania": "2026-12-31",
   "fuente_pronostico": "ECMWF_IFS_ENS_025",
   "estadistico_operativo": "P50",
-  "inicio_pronostico": "2026-10-30",
-  "fin_pronostico": "2026-11-05",
+  "inicio_pronostico": "2026-10-31",
+  "fin_pronostico": "2026-11-06",
   "miembros_validos_min": 51,
   "huecos_finales": []
 }
