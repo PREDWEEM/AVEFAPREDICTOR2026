@@ -380,9 +380,10 @@ def single_rain_response(p: Params, doy: int, mm: float, s_prev_frac: float, rem
 class AlertModel:
     """Probabilidad de flush (≥ 5 % de la campaña) en la semana siguiente.
 
-    Suma de dos percentiles respecto de 1977–2015: el pronóstico del modelo de pulsos a 7 días y la
-    fracción de lo ya emergido que emergió en el último intervalo (persistencia). Calibrada con
-    regresión logística. Sin conteos recientes usa solo el pronóstico de pulsos.
+    Suma de dos percentiles respecto de la serie histórica: el pronóstico del modelo de pulsos a 7 días
+    y la fracción de lo ya emergido que emergió en el último intervalo (persistencia). Calibrada con
+    regresión logística, con un término que corrige el primer conteo con plántulas (allí esa fracción
+    es siempre 1 y sobreestimaba la probabilidad). Sin conteos recientes usa solo el pronóstico de pulsos.
     """
     pulso_ref: np.ndarray
     g1_ref: np.ndarray
@@ -391,23 +392,25 @@ class AlertModel:
     solo_coef: float
     solo_intercept: float
     tasa_base: float
+    primer_coef: float = 0.0
 
     @classmethod
     def load(cls, path: str | Path) -> "AlertModel":
         a = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls(np.sort(np.array(a["pulso_ref"])), np.sort(np.array(a["g1_ref"])), a["logit_coef"],
-                   a["logit_intercept"], a["solo_pulsos_coef"], a["solo_pulsos_intercept"], a["tasa_base"])
+                   a["logit_intercept"], a["solo_pulsos_coef"], a["solo_pulsos_intercept"], a["tasa_base"],
+                   a.get("primer_coef", 0.0))
 
     @staticmethod
     def _ecdf(ref: np.ndarray, x: float) -> float:
         return float(np.searchsorted(ref, x, side="right") / len(ref))
 
-    def probability(self, pulso: float, g1: float | None = None) -> float:
+    def probability(self, pulso: float, g1: float | None = None, primer: bool = False) -> float:
         sp = self._ecdf(self.pulso_ref, pulso)
         if g1 is None:
             z = self.solo_intercept + self.solo_coef * sp
         else:
-            z = self.intercept + self.coef * (sp + self._ecdf(self.g1_ref, g1))
+            z = self.intercept + self.coef * (sp + self._ecdf(self.g1_ref, g1)) + self.primer_coef * float(primer)
         return float(1 / (1 + np.exp(-z)))
 
 
@@ -445,8 +448,11 @@ def counts_signal(counts: pd.DataFrame, t: pd.Timestamp) -> dict | None:
         return None
     acum = float(c["media"].sum())
     ultimo = float(c["media"].iloc[-1])
-    return {"fecha": c["Fecha"].iloc[-1], "g1": ultimo / acum if acum > 0 else 0.0,
-            "acumulado": acum, "ultimo": ultimo, "dias_desde": int((t - c["Fecha"].iloc[-1]).days)}
+    n_emerg = int((c["media"] > 0).sum())
+    g1 = ultimo / acum if acum > 0 else 0.0
+    return {"fecha": c["Fecha"].iloc[-1], "g1": g1, "acumulado": acum, "ultimo": ultimo,
+            "dias_desde": int((t - c["Fecha"].iloc[-1]).days), "semanas_con_plantulas": n_emerg,
+            "primer": bool(n_emerg == 1 and g1 >= 0.999)}
 
 
 # ---------------------------------------------------------------------------

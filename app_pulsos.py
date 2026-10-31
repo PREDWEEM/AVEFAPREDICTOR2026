@@ -190,7 +190,7 @@ fc["prob_pulsos"] = [alert.probability(v) for v in fc["dF_7d"]]
 pulso_now = float(fc["dF_7d"].iloc[-1])
 sig = ap.counts_signal(counts, emit) if not counts.empty else None
 usa_conteos = sig is not None and sig["dias_desde"] <= 7
-prob = alert.probability(pulso_now, sig["g1"] if usa_conteos else None)
+prob = alert.probability(pulso_now, sig["g1"] if usa_conteos else None, bool(usa_conteos and sig["primer"]))
 nivel = level(prob)
 
 # historial de la alerta combinada en cada fecha de conteo
@@ -200,7 +200,7 @@ for _, r in counts[(counts["Fecha"] <= emit) & (counts["Fecha"] >= pd.Timestamp(
     p_row = fc.loc[fc["Fecha"] == r["Fecha"], "dF_7d"]
     if s is None or p_row.empty:
         continue
-    hist.append({"Fecha": r["Fecha"], "prob": alert.probability(float(p_row.iloc[0]), s["g1"]), "g1": s["g1"]})
+    hist.append({"Fecha": r["Fecha"], "prob": alert.probability(float(p_row.iloc[0]), s["g1"], s["primer"]), "g1": s["g1"]})
 hist = pd.DataFrame(hist)
 
 st.markdown(f"<div class='alerta' style='background:{COLORS[nivel]}'><b>{emit:%d/%m/%Y}</b> · "
@@ -305,6 +305,8 @@ with st.expander("Cómo funciona y qué precisión tiene"):
 
 Cada señal se expresa como percentil de su distribución histórica y la suma se convierte en probabilidad de flush
 (semana con ≥ 5 % de la campaña) con una regresión logística.
+En el primer conteo con plántulas de la campaña, la señal de conteos vale siempre 100 % y sobreestimaba la
+probabilidad (43 % predicho contra 29 % observado); un término de la regresión lo corrige.
 
 **Entrenamiento.** El modelo en uso está ajustado con las 41 campañas disponibles (1977–2015, 2018, 2022 y 2026;
 1246 semanas). La precisión de abajo viene de la validación hecha antes de incorporar las campañas recientes:
