@@ -44,8 +44,11 @@ con una regresión logística (`alerta_params.json`).
 Sin conteos de la última semana, la app usa solo el modelo de pulsos. Los conteos se cargan en la tabla de la barra
 lateral o desde un CSV (`Fecha, Marco 1, Marco 2, …`); no se guardan en el repositorio.
 
-Otros cambios: el vector de `pulsos_params.json` se reajustó con la temperatura de NH0343 corregida (meses anómalos de
-2001–2005 reemplazados por ERA5 + sesgo de la estación); el vector anterior quedó en `pulsos_params_usuario.json`. La
+Modelo en uso (`pulsos_params.json` y `alerta_params.json`): ajustado con las 41 campañas disponibles (1977–2015 con
+NH0343 corregida —meses anómalos de 2001–2005 reemplazados por ERA5 + sesgo de la estación— y 2018, 2022 y 2026 con
+SIGA corregida; 1246 semanas). La tabla de precisión corresponde a la validación previa con el modelo de 1977–2015,
+guardado en `pulsos_params_1977_2015.json`; el vector de la reimplementación del manuscrito está en
+`pulsos_params_usuario.json`. La
 temperatura de SIGA se corrige por mes a la escala de NH0343 (`correccion_temperatura`).
 
 Uso local:

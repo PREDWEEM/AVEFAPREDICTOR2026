@@ -303,10 +303,15 @@ with st.expander("Cómo funciona y qué precisión tiene"):
 2. *Conteos*: la fracción de todo lo contado que salió en el último intervalo. Si la emergencia viene activa, es probable
    que siga; esto capta si la campaña viene adelantada o atrasada, que el clima solo no anticipa.
 
-Cada señal se expresa como percentil de su distribución en 1977–2015 y la suma se convierte en probabilidad de flush
+Cada señal se expresa como percentil de su distribución histórica y la suma se convierte en probabilidad de flush
 (semana con ≥ 5 % de la campaña) con una regresión logística.
 
-**Precisión** (validación dejando una campaña afuera, 1977–2015, 1163 semanas; y campañas independientes 2018, 2022 y 2026 con la estación SIGA):
+**Entrenamiento.** El modelo en uso está ajustado con las 41 campañas disponibles (1977–2015, 2018, 2022 y 2026;
+1246 semanas). La precisión de abajo viene de la validación hecha antes de incorporar las campañas recientes:
+el modelo ajustado a 1977–2015 evaluado dejando una campaña afuera y en 2018, 2022 y 2026 como campañas independientes,
+medidas con la estación SIGA. Con las 41 campañas, la validación dejando una campaña afuera da el mismo AUC (0,81).
+
+**Precisión:**
 
 | | AUC 1977–2015 | Detección con visitas en 1/3 de las semanas | AUC 2018–2026 |
 |---|---|---|---|
