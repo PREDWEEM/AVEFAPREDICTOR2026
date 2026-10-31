@@ -318,7 +318,9 @@ En el primer conteo con plántulas de la campaña, la señal de conteos vale sie
 probabilidad (43 % predicho contra 29 % observado); un término de la regresión lo corrige.
 
 **Entrenamiento.** El modelo en uso está ajustado con las 41 campañas disponibles (1977–2015, 2018, 2022 y 2026;
-1246 semanas). La precisión de abajo viene de la validación hecha antes de incorporar las campañas recientes:
+1246 semanas), con más peso a las recientes: el peso de cada campaña se reduce a la mitad cada 20 años hacia atrás,
+porque el patrón de emergencia cambió a lo largo de las décadas (más emergencia temprana en otoño). Predecir cada
+campaña desde 1990 solo con las anteriores da AUC 0,81 con la ponderación y 0,80 sin ella. La precisión de abajo viene de la validación hecha antes de incorporar las campañas recientes:
 el modelo ajustado a 1977–2015 evaluado dejando una campaña afuera y en 2018, 2022 y 2026 como campañas independientes,
 medidas con la estación SIGA. Con las 41 campañas, la validación dejando una campaña afuera da el mismo AUC (0,81).
 
