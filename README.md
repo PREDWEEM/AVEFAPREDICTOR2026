@@ -43,6 +43,9 @@ con una regresión logística (`alerta_params.json`).
 
 La regresión incluye un término para el primer conteo con plántulas de la campaña, donde la fracción del último
 intervalo es siempre 1 y sobreestimaba la probabilidad (43 % predicho contra 29 % observado; con el término, 31 %).
+La app muestra dos niveles fijos: **Atención** desde 15 % de probabilidad (48 % de las semanas marcadas, 83 % de los
+flushes cubiertos) y **Alerta** desde 25 % (34 % de las semanas, 73 % de los flushes), según la validación con las 41
+campañas dejando una afuera.
 Sin conteos de la última semana, la app usa solo el modelo de pulsos. Los conteos se cargan en la tabla de la barra
 lateral o desde un CSV (`Fecha, Marco 1, Marco 2, …`); no se guardan en el repositorio.
 
