@@ -41,6 +41,8 @@ con una regresión logística (`alerta_params.json`).
 | 1977–2015, dejando una campaña afuera (1163 semanas) | 0,76 | 0,81 | ~63 % → ~72 % |
 | 2018, 2022 y 2026, estación SIGA (83 semanas) | 0,68 | 0,76 | ~50 % → ~71 % |
 
+La regresión incluye un término para el primer conteo con plántulas de la campaña, donde la fracción del último
+intervalo es siempre 1 y sobreestimaba la probabilidad (43 % predicho contra 29 % observado; con el término, 31 %).
 Sin conteos de la última semana, la app usa solo el modelo de pulsos. Los conteos se cargan en la tabla de la barra
 lateral o desde un CSV (`Fecha, Marco 1, Marco 2, …`); no se guardan en el repositorio.
 
