@@ -23,12 +23,15 @@ PARAMS_FILE = BASE / "pulsos_params.json"
 ALERT_FILE = BASE / "alerta_params.json"
 TZ = "America/Argentina/Buenos_Aires"
 
-COLORS = {"alta": "#c2410c", "recorrer": "#d97706", "baja": "#15803d",
+ATENCION, ALERTA = 0.15, 0.25   # niveles fijos (validación 41 campañas, dejando una afuera)
+COLORS = {"alerta": "#c2410c", "atencion": "#d97706", "baja": "#15803d",
           "lluvia": "#2a78d6", "modelo": "#0f766e", "clima": "#94a3b8", "conteo": "#6b7280"}
+LEVEL_NAME = {"alerta": "Alerta", "atencion": "Atención", "baja": "Sin alerta"}
 LEVEL_TEXT = {
-    "alta": "Alerta alta: flush probable. Recorrer el lote esta semana y prever el control.",
-    "recorrer": "Recorrer: probabilidad de flush por encima del umbral elegido.",
-    "baja": "Sin alerta: flush poco probable en los próximos 7 días.",
+    "alerta": "Flush probable: recorrer todo el lote esta semana y preparar el control.",
+    "atencion": "Probabilidad de flush por encima de lo habitual: recorrer el lote si se está en la ventana de "
+                "barbecho o presiembra, o si hay un tratamiento pendiente.",
+    "baja": "Flush poco probable en los próximos 7 días.",
 }
 
 st.markdown("""
@@ -153,14 +156,13 @@ with st.sidebar:
     if not counts.empty:
         st.download_button("📥 Guardar conteos (CSV)", edited.to_csv(index=False), "conteos_avefa.csv")
 
-    st.header("Alerta")
-    umbral = st.select_slider("Recorrer el lote si la probabilidad de flush supera",
-                              options=[0.15, 0.20, 0.25, 0.30], value=0.25, format_func=lambda v: f"{v:.0%}")
-    st.caption({0.15: "Visitas en ~48 % de las semanas; detecta ~83 % de los flushes.",
-                0.20: "Visitas en ~40 % de las semanas; detecta ~78 % de los flushes.",
-                0.25: "Visitas en ~34 % de las semanas; detecta ~72 % de los flushes.",
-                0.30: "Visitas en ~27 % de las semanas; detecta ~67 % de los flushes."}[umbral]
-               + " Con conteos semanales, validación 1977–2015 dejando una campaña afuera.")
+    st.header("Niveles de alerta")
+    st.markdown(f"🟠 **Atención** desde {ATENCION:.0%} · 🔴 **Alerta** desde {ALERTA:.0%}")
+    st.caption("Con conteos semanales (41 campañas, dejando una afuera): desde 15 % se marca el 48 % de las semanas "
+               "y se cubre el 83 % de los flushes; desde 25 %, el 34 % de las semanas y el 73 % de los flushes. "
+               "Por encima de 25 % cada aviso tiene el doble de chances de flush que una semana cualquiera; "
+               "entre 15 y 25 %, más o menos las mismas. Usar Atención en la ventana de barbecho y presiembra, "
+               "cuando perder un flush sale caro.")
 
 # ---------------------------------------------------------------
 # Modelo de pulsos
@@ -182,7 +184,7 @@ if fc.empty:
 
 
 def level(p: float) -> str:
-    return "alta" if p >= 0.40 else ("recorrer" if p >= umbral else "baja")
+    return "alerta" if p >= ALERTA else ("atencion" if p >= ATENCION else "baja")
 
 
 # probabilidad solo con pulsos, todos los días
@@ -204,7 +206,8 @@ for _, r in counts[(counts["Fecha"] <= emit) & (counts["Fecha"] >= pd.Timestamp(
 hist = pd.DataFrame(hist)
 
 st.markdown(f"<div class='alerta' style='background:{COLORS[nivel]}'><b>{emit:%d/%m/%Y}</b> · "
-            f"Probabilidad de flush en los próximos 7 días: <b>{prob:.0%}</b>. {LEVEL_TEXT[nivel]}</div>",
+            f"<b>{LEVEL_NAME[nivel]}</b> · probabilidad de flush en los próximos 7 días: <b>{prob:.0%}</b>. "
+            f"{LEVEL_TEXT[nivel]}</div>",
             unsafe_allow_html=True)
 if not usa_conteos:
     if sig is None:
@@ -251,9 +254,15 @@ fig.add_trace(go.Scatter(x=fc["Fecha"], y=100 * fc["prob_pulsos"], name="Solo pu
                          line=dict(color=COLORS["modelo"], width=2)), row=1, col=1)
 if not hist.empty:
     fig.add_trace(go.Scatter(x=hist["Fecha"], y=100 * hist["prob"], name="Pulsos + conteos", mode="lines+markers",
-                             line=dict(color=COLORS["alta"], width=2), marker=dict(size=8)), row=1, col=1)
-fig.add_hline(y=100 * umbral, line_dash="dash", line_color=COLORS["recorrer"], row=1, col=1,
-              annotation_text=f"recorrer ≥ {umbral:.0%}", annotation_position="top left")
+                             line=dict(color="#2a78d6", width=2),
+                             marker=dict(size=9, color=[COLORS[level(v)] for v in hist["prob"]],
+                                         line=dict(color="white", width=1))), row=1, col=1)
+fig.add_hrect(y0=100 * ATENCION, y1=100 * ALERTA, fillcolor=COLORS["atencion"], opacity=0.08, line_width=0, row=1, col=1)
+fig.add_hrect(y0=100 * ALERTA, y1=100, fillcolor=COLORS["alerta"], opacity=0.06, line_width=0, row=1, col=1)
+fig.add_hline(y=100 * ATENCION, line_dash="dot", line_color=COLORS["atencion"], row=1, col=1,
+              annotation_text=f"Atención ≥ {ATENCION:.0%}", annotation_position="bottom left")
+fig.add_hline(y=100 * ALERTA, line_dash="dash", line_color=COLORS["alerta"], row=1, col=1,
+              annotation_text=f"Alerta ≥ {ALERTA:.0%}", annotation_position="top left")
 fig.add_trace(go.Bar(x=cc["Fecha"], y=cc["media"], name="Conteo (plántulas por marco)",
                      marker_color=COLORS["conteo"]), row=2, col=1)
 fig.add_trace(go.Bar(x=camp["Fecha"], y=camp["Prec"], name="Lluvia (mm)", marker_color=COLORS["lluvia"]), row=3, col=1)
@@ -322,6 +331,9 @@ medidas con la estación SIGA. Con las 41 campañas, la validación dejando una 
 
 La probabilidad está calibrada: cuando dice 25–30 %, el flush ocurrió en ~25 % de las semanas; cuando dice ~50 %, en ~55 %.
 
+**Niveles.** *Atención* desde 15 %: marca el 48 % de las semanas y cubre el 83 % de los flushes. *Alerta* desde 25 %:
+marca el 34 % de las semanas y cubre el 73 %; una de cada 2,3 alertas termina en flush, el doble que una semana cualquiera.
+
 **Clima.** Las temperaturas de SIGA se corrigen por mes a la escala de la estación convencional (NH0343) con la que se
 calibró el modelo, usando ERA5 como referencia común.
 
@@ -331,6 +343,7 @@ No anticipa flushes sin lluvia reciente (como el del 9–16 de marzo de 2026) ha
     st.caption(f"Parámetros del modelo de pulsos: {params.source}")
 
 st.sidebar.download_button("📥 Descargar pronósticos (CSV)",
-                           fc.assign(prob_pulsos=fc["prob_pulsos"], dF_7d_pct=100 * fc["dF_7d"]).to_csv(index=False),
+                           fc.assign(prob_pulsos=fc["prob_pulsos"], dF_7d_pct=100 * fc["dF_7d"],
+                                     nivel_solo_pulsos=[LEVEL_NAME[level(v)] for v in fc["prob_pulsos"]]).to_csv(index=False),
                            f"avefa_pulsos_{emit:%Y%m%d}.csv")
 st.sidebar.caption(f"Clima: {first:%d/%m/%Y} – {last:%d/%m/%Y} · {len(meteo)} días")
