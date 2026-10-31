@@ -51,7 +51,10 @@ lateral o desde un CSV (`Fecha, Marco 1, Marco 2, …`); no se guardan en el rep
 
 Modelo en uso (`pulsos_params.json` y `alerta_params.json`): ajustado con las 41 campañas disponibles (1977–2015 con
 NH0343 corregida —meses anómalos de 2001–2005 reemplazados por ERA5 + sesgo de la estación— y 2018, 2022 y 2026 con
-SIGA corregida; 1246 semanas). La tabla de precisión corresponde a la validación previa con el modelo de 1977–2015,
+SIGA corregida; 1246 semanas), con mínimos cuadrados ponderados: cada campaña pesa 0,5^((2026 − año)/20), porque
+el patrón de emergencia cambió a lo largo de las décadas. En validación hacia adelante (cada campaña desde 1990
+predicha solo con las anteriores) la alerta pasa de AUC 0,800 a 0,810 (IC95 del cambio +0,003 a +0,018). El ajuste
+sin ponderar está en `pulsos_params_41_sin_ponderar.json` y `alerta_params_41_sin_ponderar.json`. La tabla de precisión corresponde a la validación previa con el modelo de 1977–2015,
 guardado en `pulsos_params_1977_2015.json`; el vector de la reimplementación del manuscrito está en
 `pulsos_params_usuario.json`. La
 temperatura de SIGA se corrige por mes a la escala de NH0343 (`correccion_temperatura`).

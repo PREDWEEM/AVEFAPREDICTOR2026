@@ -5,21 +5,21 @@
   "ts_a1": -0.66,
   "W": 75.6,
   "k_loss": 0.0327,
-  "b0": -29.823861743753834,
-  "b1": 11.847004513103144,
-  "b2": -29.959282167477557,
-  "b3": 12.491279666271184,
-  "b4": -12.137660021810149,
-  "alpha0": -4.809009786475747,
-  "alpha1": -0.3637724587279783,
-  "alpha2": -1.462445669073117,
-  "delta": 1.5325350901351824,
-  "k_shape": 2.6643434549383014,
-  "theta_scale": 58.52255479887725,
+  "b0": -56.025290305525,
+  "b1": 23.444538893382926,
+  "b2": -62.324332129374426,
+  "b3": 24.025906048723105,
+  "b4": -26.25832802620204,
+  "alpha0": -4.626104051687021,
+  "alpha1": -0.36511975202956215,
+  "alpha2": -1.3104673693148723,
+  "delta": 1.4301598766026715,
+  "k_shape": 2.697794801386089,
+  "theta_scale": 55.078265371057014,
   "heat_gamma": 0.0,
   "heat_Tc": 20.0,
   "provisional": false,
-  "source": "Ajuste por mínimos cuadrados a 1246 intervalos de 41 campañas: 1977–2015 (NH0343 con meses anómalos de 2001–2005 corregidos) y 2018, 2022 y 2026 (SIGA A872817 con corrección de temperatura).",
+  "source": "Ajuste por mínimos cuadrados ponderados a 1246 intervalos de 41 campañas: 1977–2015 (NH0343 con meses anómalos de 2001–2005 corregidos) y 2018, 2022 y 2026 (SIGA A872817 con corrección de temperatura). Cada campaña pesa 0,5^((2026 − año)/20): las recientes pesan más porque el patrón de emergencia cambió a lo largo de las décadas.",
   "correccion_temperatura": {
     "tmax": [
       -0.433,
@@ -50,5 +50,9 @@
       -0.81
     ],
     "nota": "Suma mensual (°C) para llevar SIGA A872817 a la escala de NH0343; ERA5 como referencia común (NH0343 2007–2013, SIGA 2017–2026)."
+  },
+  "ponderacion": {
+    "vida_media_anios": 20,
+    "anio_referencia": 2026
   }
 }
