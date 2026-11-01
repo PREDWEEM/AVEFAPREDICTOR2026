@@ -40,6 +40,7 @@ st.markdown("""
 footer {visibility: hidden;}
 .stAppDeployButton {display: none;}
 div[data-testid="stMetricValue"] {font-size: 1.8rem;}
+.muestreo {padding: 0.6rem 1rem; border-radius: 0.5rem; margin: -0.4rem 0 1rem 0; border: 1px solid rgba(128,128,128,.35); font-size: 0.98rem;}
 .alerta {padding: 0.9rem 1.1rem; border-radius: 0.6rem; margin: 0.4rem 0 1rem 0; color: white; font-size: 1.05rem;}
 </style>
 """, unsafe_allow_html=True)
@@ -191,7 +192,7 @@ def level(p: float) -> str:
 fc["prob_pulsos"] = [alert.probability(v) for v in fc["dF_7d"]]
 pulso_now = float(fc["dF_7d"].iloc[-1])
 sig = ap.counts_signal(counts, emit) if not counts.empty else None
-usa_conteos = sig is not None and sig["dias_desde"] <= 7
+usa_conteos = sig is not None and sig["dias_desde"] <= 14   # vale hasta el conteo siguiente del esquema quincenal
 prob = alert.probability(pulso_now, sig["g1"] if usa_conteos else None, bool(usa_conteos and sig["primer"]))
 nivel = level(prob)
 
@@ -214,8 +215,37 @@ if not usa_conteos:
         st.info("Sin conteos cargados: la alerta usa solo el modelo de pulsos (menos precisa). "
                 "Con conteos semanales la detección de flushes sube de ~63 % a ~72 % con el mismo esfuerzo de recorrida.")
     else:
-        st.warning(f"El último conteo es del {sig['fecha']:%d/%m} ({sig['dias_desde']} días antes de la emisión): "
-                   "la alerta usa solo el modelo de pulsos. Cargá el conteo de esta semana para combinarlos.")
+        st.warning(f"El último conteo es del {sig['fecha']:%d/%m} ({sig['dias_desde']} días antes de la emisión, más de "
+                   "dos semanas): la alerta usa solo el modelo de pulsos. Cargá un conteo nuevo para combinarlos.")
+
+# ---------------------------------------------------------------
+# Momento de muestreo: semanal mientras haya Alerta; si no, cada 2 semanas
+# (validado en 41 campañas: AUC 0,794 contra 0,808 con conteo semanal fijo, con un tercio menos de conteos)
+# ---------------------------------------------------------------
+def intervalo_muestreo(p: float) -> int:
+    return 7 if p >= ALERTA else 14
+
+
+fin_emergencia = fc["F_emitido"].iloc[-1] >= 0.97
+if fin_emergencia:
+    prox_conteo, txt_muestreo = None, "La emergencia de la campaña está prácticamente terminada: se puede dar por cerrado el muestreo."
+elif sig is None:
+    prox_conteo = emit
+    txt_muestreo = "Contar esta semana para iniciar el seguimiento: con conteos la alerta detecta más flushes."
+else:
+    dias = intervalo_muestreo(prob)
+    prox_conteo = sig["fecha"] + pd.Timedelta(days=dias)
+    motivo = ("hay Alerta: conviene contar cada semana mientras dure" if dias == 7
+              else "sin Alerta: alcanza con un conteo cada dos semanas")
+    if prox_conteo <= emit:
+        txt_muestreo = (f"<b>Contar esta semana</b> ({motivo}). Último conteo: {sig['fecha']:%d/%m} "
+                        f"(hace {sig['dias_desde']} días).")
+    else:
+        falta = (prox_conteo - emit).days
+        txt_muestreo = (f"Próximo conteo: <b>{prox_conteo:%d/%m}</b> (en {falta} días; {motivo}). "
+                        f"Último conteo: {sig['fecha']:%d/%m}.")
+st.markdown(f"<div class='muestreo'>🗓️ <b>Muestreo.</b> {txt_muestreo}</div>", unsafe_allow_html=True)
+
 if fc["F_emitido"].iloc[-1] >= 0.97:
     st.info("Según la simulación ya emergió ≥ 97 % de la campaña. Para revisar la temporada, elegí una fecha anterior.")
 
@@ -265,6 +295,20 @@ fig.add_hline(y=100 * ALERTA, line_dash="dash", line_color=COLORS["alerta"], row
               annotation_text=f"Alerta ≥ {ALERTA:.0%}", annotation_position="top left")
 fig.add_trace(go.Bar(x=cc["Fecha"], y=cc["media"], name="Conteo (plántulas por marco)",
                      marker_color=COLORS["conteo"]), row=2, col=1)
+if not hist.empty:
+    rec = pd.DataFrame({"Fecha": hist["Fecha"] + pd.to_timedelta([intervalo_muestreo(v) for v in hist["prob"]], unit="D"),
+                        "desde": hist["Fecha"], "semanal": hist["prob"] >= ALERTA})
+    rec = rec[rec["Fecha"] <= emit]
+    if not rec.empty:
+        fig.add_trace(go.Scatter(x=rec["Fecha"], y=[0] * len(rec), mode="markers", name="Conteo recomendado",
+                                 marker=dict(symbol="triangle-up", size=11, color=COLORS["conteo"], line=dict(color="white", width=1)),
+                                 customdata=np.c_[rec["desde"].dt.strftime("%d/%m"), np.where(rec["semanal"], "1 semana (Alerta)", "2 semanas")],
+                                 hovertemplate="Conteo recomendado %{x|%d/%m}<br>a %{customdata[1]} del conteo del %{customdata[0]}<extra></extra>"),
+                      row=2, col=1)
+if prox_conteo is not None:
+    fig.add_vline(x=prox_conteo, line_dash="dot", line_color=COLORS["conteo"], line_width=1.5)
+    fig.add_annotation(x=prox_conteo, y=1, yref="paper", text=f"próximo conteo {prox_conteo:%d/%m}", showarrow=False,
+                       xanchor="left", yanchor="bottom", font=dict(size=11, color=COLORS["conteo"]))
 fig.add_trace(go.Bar(x=camp["Fecha"], y=camp["Prec"], name="Lluvia (mm)", marker_color=COLORS["lluvia"]), row=3, col=1)
 fig.update_yaxes(title_text="Prob. flush (%)", range=[0, 100], row=1, col=1)
 fig.update_yaxes(title_text="Plántulas", rangemode="tozero", row=2, col=1)
@@ -336,10 +380,15 @@ La probabilidad está calibrada: cuando dice 25–30 %, el flush ocurrió en ~25
 **Niveles.** *Atención* desde 15 %: marca el 48 % de las semanas y cubre el 83 % de los flushes. *Alerta* desde 25 %:
 marca el 34 % de las semanas y cubre el 73 %; una de cada 2,3 alertas termina en flush, el doble que una semana cualquiera.
 
+**Momentos de muestreo.** La app recomienda contar cada semana mientras haya Alerta y cada dos semanas el resto
+del tiempo; en las semanas sin conteo usa el último disponible. Simulado en las 41 campañas, este esquema da AUC 0,794
+contra 0,808 con conteo semanal fijo, con un tercio menos de conteos (65 % de las semanas). Contar cada dos semanas fijo
+baja a 0,775, y cada tres semanas o más rinde como no contar (0,75).
+
 **Clima.** Las temperaturas de SIGA se corrigen por mes a la escala de la estación convencional (NH0343) con la que se
 calibró el modelo, usando ERA5 como referencia común.
 
-**Límites.** Un sitio (Bordenave) y suelo sin labranza. Requiere conteos semanales en marcos fijos, con retiro de plántulas.
+**Límites.** Un sitio (Bordenave) y suelo sin labranza. Requiere conteos en marcos fijos, con retiro de plántulas: semanales con Alerta, quincenales sin ella.
 No anticipa flushes sin lluvia reciente (como el del 9–16 de marzo de 2026) hasta que aparecen en los conteos.
 """)
     st.caption(f"Parámetros del modelo de pulsos: {params.source}")
