@@ -21,6 +21,7 @@ BASE = Path(__file__).parent
 CSV_REPO = BASE / "meteo_daily.csv"
 PARAMS_FILE = BASE / "pulsos_params.json"
 ALERT_FILE = BASE / "alerta_params.json"
+REMANENTE_FILE = BASE / "remanente_params.json"
 TZ = "America/Argentina/Buenos_Aires"
 
 ATENCION, ALERTA = 0.15, 0.25   # niveles fijos (validación 41 campañas, dejando una afuera)
@@ -321,7 +322,37 @@ left, right = st.columns([3, 2])
 with left:
     st.subheader("Emergencia acumulada")
     camp_all = days[(days["Fecha"] >= pd.Timestamp(season_year, 2, 1)) & (days["Fecha"] <= emit)]
+    # estimación con pulsos + conteos en cada fecha de conteo con plántulas
+    est = []
+    if REMANENTE_FILE.exists() and not counts.empty:
+        rp = ap.load_remaining_params(REMANENTE_FILE)
+        Fsim = days.set_index("Fecha")["F"]
+        for t in counts.loc[(counts["Fecha"] <= emit) & (counts["Fecha"] >= pd.Timestamp(season_year, 2, 1)), "Fecha"]:
+            s_t = ap.counts_signal(counts, t)
+            if s_t is None or s_t["acumulado"] <= 0 or t not in Fsim.index:
+                continue
+            est.append({"Fecha": t, "acumulado": s_t["acumulado"], **ap.estimate_emerged(Fsim[t], t, s_t["semanas_con_plantulas"], rp)})
+    est = pd.DataFrame(est)
+    if not est.empty:
+        u = est.iloc[-1]
+        st.markdown(
+            f"Con los conteos, al **{u['Fecha']:%d/%m}** emergió alrededor del **{100 * u['F_md']:.0f} %** de la campaña "
+            f"(rango probable {100 * u['F_lo']:.0f}–{100 * u['F_hi']:.0f} %). Falta emerger "
+            + (f"entre **{100 * u['falta_lo']:.0f} % y {100 * u['falta_hi']:.0f} %** de lo contado hasta ahora "
+               if u["falta_hi"] < 1 else
+               f"entre **{fmt(u['falta_lo'], 1)} y {fmt(u['falta_hi'], 1)} veces** lo contado hasta ahora ")
+            + f"(≈ {u['falta_lo'] * u['acumulado']:.0f}–{u['falta_hi'] * u['acumulado']:.0f} plántulas por marco; "
+              f"contadas {u['acumulado']:.0f}).")
     fig2 = go.Figure()
+    if not est.empty:
+        fig2.add_trace(go.Scatter(x=est["Fecha"], y=100 * est["F_hi"], mode="lines", line=dict(width=0),
+                                  showlegend=False, hoverinfo="skip"))
+        fig2.add_trace(go.Scatter(x=est["Fecha"], y=100 * est["F_lo"], mode="lines", line=dict(width=0), fill="tonexty",
+                                  fillcolor="rgba(42,120,214,0.15)", name="Rango probable con conteos (80 %)", hoverinfo="skip"))
+        fig2.add_trace(go.Scatter(x=est["Fecha"], y=100 * est["F_md"], mode="lines+markers", name="Estimada con pulsos + conteos",
+                                  line=dict(color="#2a78d6", width=2), marker=dict(size=7),
+                                  customdata=np.c_[100 * est["F_lo"], 100 * est["F_hi"]],
+                                  hovertemplate="%{y:.0f} % (rango %{customdata[0]:.0f}–%{customdata[1]:.0f} %)<extra></extra>"))
     fig2.add_trace(go.Scatter(x=camp_all["Fecha"], y=100 * ap.climatological_curve(pd.DatetimeIndex(camp_all["Fecha"])),
                               name="Curva media 1977–2015", line=dict(color=COLORS["clima"], dash="dash")))
     fig2.add_trace(go.Scatter(x=camp_all["Fecha"], y=100 * camp_all["F"], name="Simulada con el clima de la campaña",
@@ -329,8 +360,9 @@ with left:
     fig2.update_layout(height=320, yaxis_title="% de la campaña", yaxis_range=[0, 100], hovermode="x unified",
                        margin=dict(t=10, b=10, l=10, r=10), legend=dict(orientation="h", y=1.12))
     st.plotly_chart(fig2, width="stretch")
-    st.caption("Orientativa: la simulación solo con clima no anticipa si la campaña viene adelantada o atrasada; "
-               "para eso están los conteos.")
+    st.caption("La curva simulada usa solo el clima y no sabe si la campaña viene adelantada o atrasada. La estimada con "
+               "conteos corrige eso en cada fecha de conteo; su rango contiene el valor real en ~8 de cada 10 casos "
+               "(validación en 41 campañas) y es amplio porque el total de la campaña no se conoce hasta que termina.")
 with right:
     st.subheader("Lluvias de los últimos 60 días")
     if ev.empty:
@@ -379,6 +411,11 @@ La probabilidad está calibrada: cuando dice 25–30 %, el flush ocurrió en ~25
 
 **Niveles.** *Atención* desde 15 %: marca el 48 % de las semanas y cubre el 83 % de los flushes. *Alerta* desde 25 %:
 marca el 34 % de las semanas y cubre el 73 %; una de cada 2,3 alertas termina en flush, el doble que una semana cualquiera.
+
+**Emergencia acumulada con conteos.** En cada fecha de conteo se estima qué parte de la campaña ya emergió, combinando
+la curva simulada con clima, la fecha y el número de conteos con plántulas (regresión por cuantiles, 41 campañas). El rango
+del 80 % contuvo el valor real en el 78 % de los casos dejando cada campaña afuera. Es amplio a mitad de campaña (35–45 pp)
+porque el total no se conoce hasta que la emergencia termina; se angosta hacia el final.
 
 **Momentos de muestreo.** La app recomienda contar cada semana mientras haya Alerta y cada dos semanas el resto
 del tiempo; en las semanas sin conteo usa el último disponible. Simulado en las 41 campañas, este esquema da AUC 0,794

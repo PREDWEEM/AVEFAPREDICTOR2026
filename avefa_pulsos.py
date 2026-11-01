@@ -560,3 +560,26 @@ def excel_sheets(file) -> list[str]:
         return list(pd.ExcelFile(file).sheet_names)
     except Exception:  # noqa: BLE001
         return []
+
+
+# ---------------------------------------------------------------
+# Emergencia acumulada estimada con pulsos + conteos (rango del 80 %)
+# ---------------------------------------------------------------
+def load_remaining_params(path: str | Path) -> dict:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def estimate_emerged(F_model: float, fecha: pd.Timestamp, n_conteos: int, rp: dict) -> dict:
+    """Fracción de la campaña ya emergida a la fecha de un conteo, con rango del 80 %.
+
+    Combina la curva simulada con clima (F_model), la fecha y el número de conteos con plántulas. Devuelve también
+    cuánto falta emerger relativo a lo contado: falta = (1 − F) / F.
+    """
+    F_model = float(np.clip(F_model, 0.005, 0.995))
+    w = 2 * np.pi * pd.Timestamp(fecha).dayofyear / 365
+    x = {"Intercept": 1.0, "xm": np.log(F_model / (1 - F_model)), "s": np.sin(w), "c": np.cos(w),
+         "ln_n": np.log(max(int(n_conteos), 1))}
+    q = sorted(sum(c[k] * x[k] for k in c) for c in rp["cuantiles"].values())
+    F_lo, F_md, F_hi = (1 / (1 + np.exp(-v)) for v in q)
+    return {"F_lo": F_lo, "F_md": F_md, "F_hi": F_hi,
+            "falta_lo": (1 - F_hi) / F_hi, "falta_md": (1 - F_md) / F_md, "falta_hi": (1 - F_lo) / F_lo}
