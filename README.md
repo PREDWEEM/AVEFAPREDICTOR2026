@@ -46,7 +46,7 @@ intervalo es siempre 1 y sobreestimaba la probabilidad (43 % predicho contra 29 
 La app muestra dos niveles fijos: **Atención** desde 15 % de probabilidad (48 % de las semanas marcadas, 83 % de los
 flushes cubiertos) y **Alerta** desde 25 % (34 % de las semanas, 73 % de los flushes), según la validación con las 41
 campañas dejando una afuera.
-La app indica cuándo contar: cada semana mientras haya Alerta y cada dos semanas el resto (simulado en 41 campañas: AUC 0,794 contra 0,808 con conteo semanal fijo, con un tercio menos de conteos). Un conteo vale hasta 14 días; sin conteos recientes, la app usa solo el modelo de pulsos. Los conteos se cargan en la tabla de la barra
+Con conteos, la app estima además qué parte de la campaña ya emergió y cuánto falta, con un rango del 80 % calibrado en 41 campañas (`remanente_params.json`; cobertura fuera de muestra 78 %). La app indica cuándo contar: cada semana mientras haya Alerta y cada dos semanas el resto (simulado en 41 campañas: AUC 0,794 contra 0,808 con conteo semanal fijo, con un tercio menos de conteos). Un conteo vale hasta 14 días; sin conteos recientes, la app usa solo el modelo de pulsos. Los conteos se cargan en la tabla de la barra
 lateral o desde un CSV (`Fecha, Marco 1, Marco 2, …`); no se guardan en el repositorio.
 
 Modelo en uso (`pulsos_params.json` y `alerta_params.json`): ajustado con las 41 campañas disponibles (1977–2015 con

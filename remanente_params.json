@@ -1,0 +1,27 @@
+{
+  "cuantiles": {
+    "0.1": {
+      "Intercept": -3.624504915818264,
+      "xm": 0.8275979807036147,
+      "s": 0.21866133641501592,
+      "c": 0.3541653784396135,
+      "ln_n": 1.1411249817723574
+    },
+    "0.5": {
+      "Intercept": -2.834926299622166,
+      "xm": 0.6900464995160378,
+      "s": 0.09005488757521314,
+      "c": 0.7794402914806786,
+      "ln_n": 1.4143773622235274
+    },
+    "0.9": {
+      "Intercept": -1.2248223997328909,
+      "xm": 0.16825554403779625,
+      "s": -0.7856980131286163,
+      "c": 1.0505231240284667,
+      "ln_n": 1.4932834352709106
+    }
+  },
+  "fuente": "Regresión por cuantiles de logit(emergido observado) sobre logit(emergido simulado con clima), la fecha (sin y cos del día del año) y el log del número de conteos con plántulas; 1165 fechas de conteo de 41 campañas. Validación dejando cada campaña afuera: el rango del 80 % contiene el valor real en el 78 % de los casos; error mediano de la mediana 2–13 pp según la etapa (modelo solo con clima: 8–14 pp).",
+  "cobertura_validada": 0.78
+}
