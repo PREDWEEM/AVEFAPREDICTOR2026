@@ -336,13 +336,38 @@ st.subheader("Campaña: probabilidad de flush, conteos y lluvia")
 camp = days[(days["Fecha"] >= pd.Timestamp(season_year, 2, 1)) & (days["Fecha"] <= emit)]
 cc = counts[(counts["Fecha"] >= pd.Timestamp(season_year, 1, 1)) & (counts["Fecha"] <= emit)]
 fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.27, 0.23], vertical_spacing=0.05)
+# cada valor anticipa los 7 días que empiezan en su fecha: «Solo pulsos» es diaria (el cursor indica la semana que
+# anticipa); «Pulsos + conteos» se dibuja en tramos sobre la semana que anticipa cada conteo; el tramo punteado es el
+# pronóstico de los próximos 7 días desde la fecha de emisión
 fig.add_trace(go.Scatter(x=fc["Fecha"], y=100 * fc["prob_pulsos"], name="Solo pulsos (diaria)",
-                         line=dict(color=COLORS["modelo"], width=2)), row=1, col=1)
+                         line=dict(color=COLORS["modelo"], width=2),
+                         customdata=np.c_[fc["Fecha"].dt.strftime("%d/%m"), (fc["Fecha"] + pd.Timedelta(days=6)).dt.strftime("%d/%m")],
+                         hovertemplate="Solo pulsos: %{y:.0f} % (anticipa %{customdata[0]}–%{customdata[1]})<extra></extra>"),
+              row=1, col=1)
 if not hist.empty:
-    fig.add_trace(go.Scatter(x=hist["Fecha"], y=100 * hist["prob"], name="Pulsos + conteos", mode="lines+markers",
-                             line=dict(color="#2a78d6", width=2),
-                             marker=dict(size=9, color=[COLORS[level(v)] for v in hist["prob"]],
-                                         line=dict(color="white", width=1))), row=1, col=1)
+    h = hist.sort_values("Fecha").reset_index(drop=True)
+    sig_f = list(h["Fecha"].iloc[1:]) + [pd.Timestamp.max]
+    for i, (f0, v) in enumerate(zip(h["Fecha"], h["prob"])):
+        f1 = min(f0 + pd.Timedelta(days=7), sig_f[i], emit)
+        if f1 <= f0:
+            continue
+        fig.add_trace(go.Scatter(x=[f0, f1], y=[100 * v, 100 * v], mode="lines", line=dict(color="#2a78d6", width=3),
+                                 hoverinfo="skip", showlegend=i == 0, name="Pulsos + conteos (semana de cada conteo)",
+                                 legendgroup="conteos"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=[f0 + (f1 - f0) / 2], y=[100 * v], mode="markers", showlegend=False, legendgroup="conteos",
+                                 marker=dict(size=9, color=COLORS[level(v)], line=dict(color="white", width=1)),
+                                 hovertemplate=f"Pulsos + conteos: %{{y:.0f}} % · {LEVEL_NAME[level(v)]} "
+                                               f"(conteo del {f0:%d/%m}; semana {f0:%d/%m}–{f0 + pd.Timedelta(days=6):%d/%m})<extra></extra>"),
+                      row=1, col=1)
+fin_prox = emit + pd.Timedelta(days=7)
+fig.add_trace(go.Scatter(x=[emit, fin_prox], y=[100 * prob, 100 * prob], mode="lines", name="Próximos 7 días",
+                         line=dict(color=COLORS[nivel], width=3.5, dash="dot"), hoverinfo="skip"), row=1, col=1)
+fig.add_trace(go.Scatter(x=[emit + pd.Timedelta(days=3.5)], y=[100 * prob], mode="markers+text", showlegend=False,
+                         marker=dict(size=11, color=COLORS[nivel], symbol="circle-open", line=dict(width=2.5)),
+                         text=[f"{100 * prob:.0f} %"], textposition="top center", textfont=dict(size=11, color=COLORS[nivel]),
+                         hovertemplate=f"Próximos 7 días ({emit:%d/%m}–{emit + pd.Timedelta(days=6):%d/%m}): %{{y:.0f}} % · "
+                                       f"{LEVEL_NAME[nivel]}<extra></extra>"), row=1, col=1)
+fig.add_vline(x=emit, line_dash="dash", line_color="#9ca3af", line_width=1)
 fig.add_hrect(y0=100 * ATENCION, y1=100 * ALERTA, fillcolor=COLORS["atencion"], opacity=0.08, line_width=0, row=1, col=1)
 fig.add_hrect(y0=100 * ALERTA, y1=100, fillcolor=COLORS["alerta"], opacity=0.06, line_width=0, row=1, col=1)
 fig.add_hline(y=100 * ATENCION, line_dash="dot", line_color=COLORS["atencion"], row=1, col=1,
@@ -372,6 +397,34 @@ fig.update_yaxes(title_text="Lluvia (mm)", rangemode="tozero", row=3, col=1)
 fig.update_layout(height=560, hovermode="x unified", margin=dict(t=20, b=10, l=10, r=10),
                   legend=dict(orientation="h", y=1.06), bargap=0.15)
 st.plotly_chart(fig, width="stretch")
+st.caption("Cada valor anticipa los 7 días que empiezan en su fecha. La línea verde es la probabilidad diaria con el modelo de "
+           "pulsos; los tramos azules, la de cada conteo sobre la semana que anticipa (color del punto = nivel); el tramo punteado, "
+           "a la derecha de la línea gris de la fecha de emisión, es el pronóstico de los próximos 7 días.")
+with st.expander("Cómo leer los gráficos (explicación simple)"):
+    st.markdown("""
+**Arriba: ¿esta semana van a salir plantas?** Es como el pronóstico de lluvia, pero para la avena guacha (*Avena fatua*). La altura indica qué
+tan probable es que en los próximos 7 días salga una camada importante de plantas (al menos 1 de cada 20 de toda la
+temporada). Es una chance, no una cantidad: «30 %» quiere decir que en semanas así la camada salió unas 3 de cada 10 veces.
+
+- 🟢 **Verde:** semana tranquila.
+- 🟠 **Naranja:** un poco más probable que lo normal; si se acerca una aplicación o la siembra, conviene mirar el lote.
+- 🔴 **Rojo:** es probable que salgan plantas; recorrer el lote esta semana y preparar el control.
+- **El tramo punteado** a la derecha es el pronóstico de la semana que empieza: lo que importa hoy.
+
+**En el medio: los conteos.** Las barras son las plántulas contadas en cada visita; los triángulos, cuándo convenía volver a contar.
+
+**Abajo: las lluvias.** Cada lluvia «despierta» semillas, que salen unos días después (más rápido con calor, más lento en invierno).
+
+**Emergencia acumulada: ¿cuánto salió de la temporada?** Como una barra de descarga, de 0 % (no salió nada) a 100 % (ya salió todo).
+La línea verde es la simulación con el clima de este año; la gris, un año típico; la azul con su franja, la estimación con los
+conteos (la temporada real cae dentro de la franja unas 8 de cada 10 veces).
+
+**Ventana de siembra (de mayo a agosto):** el recuadro violeta resume cuántas plantas faltan salir y cuándo se espera el
+próximo flush por lluvia, para decidir la fecha de siembra.
+
+La app usa las lluvias que ya cayeron y lo que se contó en el lote: si llueve mañana, todavía no lo sabe. Cuanto más seguido
+se cuenta, más acierta.
+""")
 
 left, right = st.columns([3, 2])
 with left:
