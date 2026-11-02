@@ -37,10 +37,26 @@ LATITUD = float(os.getenv("LATITUD", "-37.85"))
 LONGITUD = float(os.getenv("LONGITUD", "-63.02"))
 ZONA_HORARIA = "America/Argentina/Buenos_Aires"
 
-# Campaña configurable por variables de entorno (AAAA-MM-DD). Para Avena fatua
-# la emergencia se sigue de febrero a octubre; se deja margen hasta fin de año.
-CAMPANIA_START = date.fromisoformat(os.getenv("CAMPANIA_START", "2026-01-01"))
-CAMPANIA_END = date.fromisoformat(os.getenv("CAMPANIA_END", "2026-12-31"))  # Última fecha meteorológica, inclusive.
+
+def _campania_vigente() -> tuple[date, date]:
+    """Campaña meteorológica operativa: del 1 de enero al 31 de diciembre del año en curso (hora de Argentina).
+
+    Para Avena fatua la emergencia se sigue de febrero a octubre; se deja margen hasta fin de año. El 1 de enero
+    comienza automáticamente la carga de la campaña nueva. Las variables de entorno CAMPANIA_START y CAMPANIA_END
+    (AAAA-MM-DD) permiten fijar otras fechas.
+    """
+    hoy = datetime.now(ZoneInfo(ZONA_HORARIA)).date()
+    inicio = os.getenv("CAMPANIA_START", "").strip()
+    fin = os.getenv("CAMPANIA_END", "").strip()
+    return (date.fromisoformat(inicio) if inicio else date(hoy.year, 1, 1),
+            date.fromisoformat(fin) if fin else date(hoy.year, 12, 31))
+
+
+# Días desde el comienzo de la campaña en que se admite una serie sin observaciones SIGA del año
+# (SIGA publica con demora; mientras tanto se usan el puente provisional y el pronóstico ECMWF).
+DIAS_TOLERANCIA_INICIO = 21
+
+CAMPANIA_START, CAMPANIA_END = _campania_vigente()  # CAMPANIA_END: última fecha meteorológica, inclusive.
 HORIZONTE_DIAS = 7
 TBASE = 2.0
 
@@ -48,6 +64,7 @@ ARCHIVO_MAESTRO_DEFAULT = Path("meteo_daily.csv")
 ARCHIVO_SIGA_CACHE = Path("data/siga_bordenave_observado.csv")
 DIRECTORIO_PRONOSTICOS = Path("data/historico_pronosticos")
 ARCHIVO_ESTADO = Path("data/estado_actualizacion_meteo.json")
+DIRECTORIO_CAMPANIAS = Path("data/campanias")  # copias fijas de campañas cerradas
 
 SIGA_ARCHIVO_LOCAL = Path(os.getenv("SIGA_LOCAL_FILE", "A872817.xls"))
 SIGA_URL_TEMPLATE = os.getenv("SIGA_DOWNLOAD_URL", "").strip()
@@ -509,7 +526,8 @@ def obtener_siga_dataframe(
             cache["Fecha_dt"] = pd.to_datetime(cache["Fecha"], errors="coerce")
             cache = cache.dropna(subset=["Fecha_dt"])
             cache = cache.loc[
-                cache["Fecha_dt"].dt.date < fecha_fin + timedelta(days=1)
+                (cache["Fecha_dt"].dt.date >= CAMPANIA_START)
+                & (cache["Fecha_dt"].dt.date < fecha_fin + timedelta(days=1))
             ].copy()
             cache["Fecha"] = cache["Fecha_dt"].dt.strftime("%Y-%m-%d")
             cache = cache.drop(columns=["Fecha_dt"])
@@ -1058,10 +1076,37 @@ def validar_serie_final(df: pd.DataFrame, fecha_final: date) -> None:
         raise ValueError("El pronóstico tiene menos de 30 miembros válidos.")
 
 
+def archivar_campania_anterior(output: Path = ARCHIVO_MAESTRO_DEFAULT) -> Path | None:
+    """Al empezar una campaña nueva, guarda una copia fija de la serie de la campaña anterior.
+
+    Si ``output`` todavía contiene solo fechas de un año anterior al de la campaña vigente (la primera actualización
+    del 1 de enero), se copia a ``data/campanias/<año>/clima_bordenave_<año>.csv`` antes de reemplazarla. No
+    sobrescribe una copia existente.
+    """
+    if not output.exists():
+        return None
+    try:
+        fechas = pd.to_datetime(pd.read_csv(output, usecols=["Fecha"])["Fecha"], errors="coerce").dropna()
+    except Exception as error:  # noqa: BLE001
+        print(f"⚠️ No se pudo leer la serie anterior para archivarla: {error}")
+        return None
+    if fechas.empty or fechas.dt.year.max() >= CAMPANIA_START.year or fechas.dt.year.nunique() != 1:
+        return None
+    anio = int(fechas.dt.year.iloc[0])
+    destino = DIRECTORIO_CAMPANIAS / str(anio) / f"clima_bordenave_{anio}.csv"
+    if destino.exists():
+        return None
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(output, destino)
+    print(f"📁 Campaña {anio} archivada en {destino}")
+    return destino
+
+
 def construir_meteo_daily(
     output: Path = ARCHIVO_MAESTRO_DEFAULT,
     siga_file: Path | None = None,
 ) -> pd.DataFrame:
+    archivar_campania_anterior(output)
     hoy = hoy_argentina()
     ayer = min(hoy - timedelta(days=1), CAMPANIA_END)
 
@@ -1071,7 +1116,12 @@ def construir_meteo_daily(
         archivo_forzado=siga_file,
     )
     if observaciones.empty:
-        raise ValueError("SIGA no aportó ninguna observación válida.")
+        if (hoy - CAMPANIA_START).days <= DIAS_TOLERANCIA_INICIO:
+            print("ℹ️ Comienzo de campaña: SIGA todavía no publicó observaciones del año; "
+                  "se usan el puente provisional y el pronóstico ECMWF.")
+            observaciones = asegurar_columnas(pd.DataFrame(columns=COLUMNAS_COMPLETAS))
+        else:
+            raise ValueError("SIGA no aportó ninguna observación válida.")
 
     huecos_siga = fechas_faltantes_siga(
         observaciones,
@@ -1119,14 +1169,14 @@ def construir_meteo_daily(
     escribir_csv_atomico(combinado, output)
 
     fechas_obs = pd.to_datetime(observaciones["Fecha"], errors="coerce").dropna()
-    ultima_observacion = fechas_obs.max().date()
+    ultima_observacion = fechas_obs.max().date() if not fechas_obs.empty else None
     estado = {
         "ejecucion_utc": fecha_utc_iso(),
         "sitio": "Bordenave / INTA",
         "latitud": LATITUD,
         "longitud": LONGITUD,
         "estado_siga": estado_siga,
-        "ultima_observacion_siga": ultima_observacion.isoformat(),
+        "ultima_observacion_siga": ultima_observacion.isoformat() if ultima_observacion else None,
         "huecos_siga": [fecha.isoformat() for fecha in huecos_siga],
         "fuente_provisional": (
             "ECMWF_IFS_HISTORICO" if not provisionales.empty else None

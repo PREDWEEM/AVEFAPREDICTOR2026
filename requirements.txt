@@ -8,3 +8,4 @@ matplotlib
 scipy
 streamlit>=1.50
 xlrd
+XlsxWriter

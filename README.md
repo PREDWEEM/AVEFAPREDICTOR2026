@@ -7,7 +7,7 @@ Predictores de emergencia de *Avena fatua* para Bordenave (Buenos Aires), en Str
 2. **ECMWF IFS histórico**: completa provisionalmente las fechas vencidas que SIGA todavía no publicó (`TipoDato=Provisional`); se reemplaza cuando SIGA las publica.
 3. **ECMWF IFS ENS 0,25°**: pronóstico de hoy a 6 días, con la mediana del ensamble (P50) como valor operativo.
 
-La campaña se define con `CAMPANIA_START` y `CAMPANIA_END` en `.github/workflows/actualizar_meteo_bordenave.yml` (hoy 2026-01-01 a 2026-12-31); cambiarlas al empezar 2027. `A872817.xls` es el respaldo local si SIGA no responde.
+La campaña es automática: del 1 de enero al 31 de diciembre del año en curso (hora de Argentina). El **1 de enero se reinicia sola la carga** con la campaña nueva (la de 2027 empieza el 1/01/2027): en la primera actualización del año la serie de la campaña anterior se guarda en `data/campanias/<año>/clima_bordenave_<año>.csv` (no se sobrescribe si ya existe), la caché SIGA se limita a la campaña vigente y, durante las primeras tres semanas, se admite una serie sin observaciones SIGA del año (SIGA publica con demora), cubierta con el puente provisional y el pronóstico ECMWF. Las variables `CAMPANIA_START` y `CAMPANIA_END` (AAAA-MM-DD) permiten fijar otras fechas. `A872817.xls` es el respaldo local si SIGA no responde. Antes del 1 de febrero la app AVEFA Pulsos avisa que la campaña todavía no empezó.
 
 | App | Archivo principal | Modelo |
 |---|---|---|
@@ -28,6 +28,9 @@ Archivos:
 - `pulsos_params.json`: vector θ de 11 parámetros ajustado por mínimos cuadrados no lineales a los intervalos de 1977–2015 con una reimplementación en Python (no es el vector del código original del manuscrito). La forma y la escala del núcleo gamma se guardan ya exponenciadas (`k_shape = exp θ₁₀`, `theta_scale = exp θ₁₁`). Si `"provisional": true`, la app muestra un aviso.
 - `pulsos_params_reconstruidos.json`: vector alternativo reconstruido con `tools/reconstruir_parametros.py` a partir de los valores derivados publicados; queda como referencia.
 - `app_pulsos.py`: interfaz. Admite `?fecha=AAAA-MM-DD` en la URL y la carga de un CSV propio (`Fecha, TMAX, TMIN, Prec`).
+  Al final de la página, **Descargar resultados en Excel** reúne lo que muestra la app para la fecha de emisión: resumen
+  (nivel, probabilidad, muestreo), alerta diaria del modelo de pulsos, alerta con conteos, conteos, emergencia acumulada
+  (simulada, curva media y estimada con conteos y su rango), lluvias de los últimos 60 días y clima.
 
 ### Alerta combinada (pulsos + conteos)
 
@@ -72,4 +75,4 @@ Límites: predice proporciones de la campaña (no pl/m²); un sitio, suelo sin l
 
 ### Validación 2026
 
-`python tools/validar_2026.py` compara el modelo con los conteos de 2026 sin remoción (`data/emergencia_2026_SR.csv`) usando el mismo `meteo_daily.csv` de la app; `tools/figura_validacion_2026.py` genera `docs/validacion_2026.png`.
+`python tools/validar_2026.py` compara el modelo con los conteos de 2026 sin remoción (`data/emergencia_2026_SR.csv`) usando el clima de la app (`meteo_daily.csv` mientras dure la campaña 2026; desde el 1/1/2027, la copia `data/campanias/2026/clima_bordenave_2026.csv`); `tools/figura_validacion_2026.py` genera `docs/validacion_2026.png`.

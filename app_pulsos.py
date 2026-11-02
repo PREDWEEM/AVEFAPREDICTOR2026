@@ -13,7 +13,15 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+import importlib
+import io
+import re
+
 import avefa_pulsos as ap
+
+# Streamlit conserva en memoria los módulos ya importados entre ejecuciones: tras una actualización del repositorio,
+# recargarlo evita usar una versión vieja del modelo
+importlib.reload(ap)
 
 st.set_page_config(page_title="AVEFA Pulsos — alerta de flushes", layout="wide", page_icon="🌧️")
 
@@ -109,7 +117,7 @@ with st.sidebar:
         for line in source_summary(CSV_REPO.stat().st_mtime):
             st.caption(line)
 
-    default_emit = min(today_local(), last)
+    default_emit = min(max(today_local(), first), last)
     try:
         qp = st.query_params.get("fecha")
         if qp:
@@ -430,8 +438,77 @@ No anticipa flushes sin lluvia reciente (como el del 9–16 de marzo de 2026) ha
 """)
     st.caption(f"Parámetros del modelo de pulsos: {params.source}")
 
-st.sidebar.download_button("📥 Descargar pronósticos (CSV)",
-                           fc.assign(prob_pulsos=fc["prob_pulsos"], dF_7d_pct=100 * fc["dF_7d"],
-                                     nivel_solo_pulsos=[LEVEL_NAME[level(v)] for v in fc["prob_pulsos"]]).to_csv(index=False),
-                           f"avefa_pulsos_{emit:%Y%m%d}.csv")
+# ---------------------------------------------------------------
+# Descarga: los resultados que muestra la app para la fecha de emisión
+# ---------------------------------------------------------------
+def _fecha(v):
+    return "" if v is None or pd.isna(v) else pd.Timestamp(v).strftime("%d/%m/%Y")
+
+
+def _tabla_resultados() -> dict[str, pd.DataFrame]:
+    resumen = [
+        ("Localidad", "Bordenave (Buenos Aires)"),
+        ("Fecha de emisión", _fecha(emit)),
+        ("Nivel", LEVEL_NAME[nivel]),
+        ("Probabilidad de flush en los próximos 7 días (%)", round(100 * prob, 1)),
+        ("Información usada", "pulsos + conteos" if usa_conteos else "solo modelo de pulsos"),
+        ("Emergencia esperada por lluvias, próximos 7 días (% de la campaña)", round(100 * pulso_now, 2)),
+        ("Último conteo", _fecha(sig["fecha"]) if sig else ""),
+        ("Última semana / total contado (%)", round(100 * sig["g1"], 1) if sig else ""),
+        ("Próximo conteo recomendado", _fecha(prox_conteo)),
+        ("Muestreo", re.sub(r"<[^>]+>", "", txt_muestreo)),
+        ("Próximo flush por lluvia (mediana)", _fecha(proximos.sort_values("fecha_mediana_flush").iloc[0]["fecha_mediana_flush"])
+         if not proximos.empty else ""),
+        ("Emergencia simulada a la fecha (% de la campaña)", round(100 * float(fc["F_emitido"].iloc[-1]), 1)),
+        ("Niveles", f"Atención desde {ATENCION:.0%}; Alerta desde {ALERTA:.0%}"),
+        ("Clima", f"{_fecha(first)} – {_fecha(last)} ({'CSV propio' if upload is not None else 'SIGA–INTA Bordenave + ECMWF'})"),
+        ("Parámetros del modelo de pulsos", str(params.source)),
+    ]
+    diaria = fc.assign(prob_pulsos_pct=(100 * fc["prob_pulsos"]).round(1), dF_7d_pct=(100 * fc["dF_7d"]).round(2),
+                       nivel_solo_pulsos=[LEVEL_NAME[level(v)] for v in fc["prob_pulsos"]])
+    tablas = {"Resumen": pd.DataFrame(resumen, columns=["Indicador", "Valor"]), "Alerta_diaria_pulsos": diaria}
+    if not hist.empty:
+        tablas["Alerta_con_conteos"] = hist.assign(prob_pct=(100 * hist["prob"]).round(1),
+                                                   nivel=[LEVEL_NAME[level(v)] for v in hist["prob"]])
+    if not counts.empty:
+        tablas["Conteos"] = counts[counts["Fecha"] <= emit]
+    acum = camp_all[["Fecha", "F"]].rename(columns={"F": "Simulada_clima"})
+    acum["Curva_media_1977_2015"] = ap.climatological_curve(pd.DatetimeIndex(acum["Fecha"]))
+    if not est.empty:
+        acum = acum.merge(est[["Fecha", "F_md", "F_lo", "F_hi"]].rename(
+            columns={"F_md": "Estimada_conteos", "F_lo": "Rango_80_bajo", "F_hi": "Rango_80_alto"}), on="Fecha", how="left")
+    tablas["Emergencia_acumulada"] = acum
+    if not ev.empty:
+        tablas["Lluvias_60_dias"] = ev[["Fecha", "Prec", "S_prev", "emergencia_esperada", "fecha_mediana_flush", "fecha_p90_flush"]]
+    tablas["Clima"] = meteo[meteo["Fecha"] <= emit + pd.Timedelta(days=7)]
+    return tablas
+
+
+def _escribir_hoja(writer, dataframe: pd.DataFrame, nombre: str) -> None:
+    if not isinstance(dataframe, pd.DataFrame) or dataframe.empty:
+        return
+    dataframe.to_excel(writer, sheet_name=nombre[:31], index=False)
+    hoja = writer.sheets[nombre[:31]]
+    ultima = max(0, len(dataframe.columns) - 1)
+    hoja.freeze_panes(1, 0)
+    hoja.autofilter(0, 0, len(dataframe), ultima)
+    hoja.set_column(0, ultima, 18)
+
+
+try:
+    _excel = io.BytesIO()
+    with pd.ExcelWriter(_excel, engine="xlsxwriter", datetime_format="dd/mm/yyyy", date_format="dd/mm/yyyy") as writer:
+        for _nombre, _tabla in _tabla_resultados().items():
+            _escribir_hoja(writer, _tabla, _nombre)
+    st.divider()
+    st.subheader("📥 Descarga de resultados")
+    st.caption("Excel con lo que muestra la app para la fecha de emisión elegida: resumen (nivel, probabilidad, muestreo), "
+               "alerta diaria del modelo de pulsos, alerta con conteos, conteos, emergencia acumulada (simulada, curva media "
+               "y estimada con conteos y su rango), lluvias recientes y clima.")
+    st.download_button("📊 Descargar resultados en Excel", _excel.getvalue(),
+                       f"AVEFA_pulsos_Bordenave_{emit:%Y-%m-%d}.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       width="stretch", key="descarga_excel_avefa")
+except Exception as _error:  # noqa: BLE001
+    st.warning(f"No se pudo preparar la descarga en Excel: {_error}")
 st.sidebar.caption(f"Clima: {first:%d/%m/%Y} – {last:%d/%m/%Y} · {len(meteo)} días")

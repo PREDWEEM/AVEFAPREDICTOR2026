@@ -24,6 +24,13 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def clima_2026():
+    """Clima 2026: la copia fija de data/campanias/2026 (desde el 1/1/2027) o meteo_daily.csv mientras dure la campaña."""
+    copia = ROOT / "data/campanias/2026/clima_bordenave_2026.csv"
+    return copia if copia.exists() else ROOT / "meteo_daily.csv"
+
 sys.path.insert(0, str(ROOT))
 import avefa_pulsos as ap  # noqa: E402
 
@@ -142,7 +149,7 @@ def evaluate(params: ap.Params, counts: pd.DataFrame, meteo: pd.DataFrame, label
 
 def main():
     counts, total = load_counts()
-    meteo = ap.clean_meteo(pd.read_csv(ROOT / "meteo_daily.csv"))
+    meteo = ap.clean_meteo(pd.read_csv(clima_2026()))
     out = []
     for label, f in [("ajustado", "pulsos_params.json"), ("reconstruido", "pulsos_params_reconstruidos.json")]:
         res, v, *_ = evaluate(ap.Params.load(ROOT / f), counts, meteo, label)
