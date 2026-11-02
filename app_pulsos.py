@@ -265,6 +265,53 @@ ev["emergencia_esperada"] = [(1 - F_at.get(f - pd.Timedelta(days=1), 0.0)) * (1 
                              for f, h in zip(ev["Fecha"], ev["hazard_total"])]
 proximos = ev[(ev["fecha_mediana_flush"] > emit) & (ev["emergencia_esperada"] >= 0.01)]
 
+# estimación con pulsos + conteos en cada fecha de conteo con plántulas (emergido y lo que falta, rango del 80 %)
+est = []
+if REMANENTE_FILE.exists() and not counts.empty:
+    rp = ap.load_remaining_params(REMANENTE_FILE)
+    Fsim = days.set_index("Fecha")["F"]
+    for t in counts.loc[(counts["Fecha"] <= emit) & (counts["Fecha"] >= pd.Timestamp(season_year, 2, 1)), "Fecha"]:
+        s_t = ap.counts_signal(counts, t)
+        if s_t is None or s_t["acumulado"] <= 0 or t not in Fsim.index:
+            continue
+        est.append({"Fecha": t, "acumulado": s_t["acumulado"], **ap.estimate_emerged(Fsim[t], t, s_t["semanas_con_plantulas"], rp)})
+est = pd.DataFrame(est)
+
+# ---------------------------------------------------------------
+# Ventana de siembra (1/05–31/08): cuánto falta emerger y cuándo se espera el próximo flush
+# ---------------------------------------------------------------
+en_siembra = 5 <= emit.month <= 8
+siembra = {}
+if en_siembra:
+    u = est.iloc[-1] if not est.empty and (emit - est.iloc[-1]["Fecha"]).days <= 14 else None
+    if u is not None:
+        lo, hi = u["falta_lo"] * u["acumulado"], u["falta_hi"] * u["acumulado"]
+        siembra["falta"] = (f"Con el conteo del <b>{u['Fecha']:%d/%m}</b>, ya emergió alrededor del <b>{100 * u['F_md']:.0f} %</b> de la "
+                            f"campaña (rango {100 * u['F_lo']:.0f}–{100 * u['F_hi']:.0f} %): <b>falta emerger entre {lo:.0f} y {hi:.0f} "
+                            f"plántulas por marco</b> (contadas hasta ahora: {u['acumulado']:.0f}).")
+        siembra["excel"] = (f"{100 * u['F_md']:.0f} % emergido ({100 * u['F_lo']:.0f}–{100 * u['F_hi']:.0f} %); "
+                            f"faltan {lo:.0f}–{hi:.0f} plántulas por marco (conteo del {u['Fecha']:%d/%m})")
+    else:
+        f_sim = float(fc["F_emitido"].iloc[-1])
+        siembra["falta"] = (f"Sin un conteo de las últimas dos semanas: según la simulación con clima falta emerger alrededor del "
+                            f"<b>{100 * (1 - f_sim):.0f} %</b> de la campaña (sin rango validado). <b>Contar</b> para estimar cuántas "
+                            "plántulas faltan, con un rango validado.")
+        siembra["excel"] = f"sin conteo reciente; simulación con clima: falta ~{100 * (1 - f_sim):.0f} % de la campaña"
+    if not proximos.empty:
+        nx = proximos.sort_values("fecha_mediana_flush").iloc[0]
+        siembra["flush"] = (f"Próximo flush por lluvia: alrededor del <b>{nx['fecha_mediana_flush']:%d/%m}</b> (lluvia del "
+                            f"{nx['Fecha']:%d/%m}, {nx['Prec']:.0f} mm; ~{100 * nx['emergencia_esperada']:.1f} % de la campaña).")
+    else:
+        siembra["flush"] = "Sin lluvias recientes con respuesta esperada ≥ 1 % de la campaña: no se anticipa un flush por lluvia."
+    st.markdown(
+        "<div style='background:#ede9fe;color:#3b0764;padding:0.75rem 1.1rem;border-radius:0.6rem;margin:-0.4rem 0 1rem 0;"
+        "font-size:1.0rem'>🌾 <b>Ventana de siembra.</b> " + siembra["falta"] + " " + siembra["flush"]
+        + f" Alerta de flush para los próximos 7 días: <b>{LEVEL_NAME[nivel]}</b> ({prob:.0%})."
+        "<br><span style='font-size:0.88rem;opacity:0.9'>Del 1/05 al 31/08 se resume lo que importa para la fecha de siembra. "
+        "El rango del 80 % contuvo el valor real en el 78 % de los casos (41 campañas, dejando cada una afuera); es más "
+        "angosto hacia el final de la campaña.</span></div>",
+        unsafe_allow_html=True)
+
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Probabilidad de flush (7 días)", f"{prob:.0%}",
           help="Flush: semana con ≥ 5 % de la emergencia de la campaña. Tasa histórica: "
@@ -330,17 +377,6 @@ left, right = st.columns([3, 2])
 with left:
     st.subheader("Emergencia acumulada")
     camp_all = days[(days["Fecha"] >= pd.Timestamp(season_year, 2, 1)) & (days["Fecha"] <= emit)]
-    # estimación con pulsos + conteos en cada fecha de conteo con plántulas
-    est = []
-    if REMANENTE_FILE.exists() and not counts.empty:
-        rp = ap.load_remaining_params(REMANENTE_FILE)
-        Fsim = days.set_index("Fecha")["F"]
-        for t in counts.loc[(counts["Fecha"] <= emit) & (counts["Fecha"] >= pd.Timestamp(season_year, 2, 1)), "Fecha"]:
-            s_t = ap.counts_signal(counts, t)
-            if s_t is None or s_t["acumulado"] <= 0 or t not in Fsim.index:
-                continue
-            est.append({"Fecha": t, "acumulado": s_t["acumulado"], **ap.estimate_emerged(Fsim[t], t, s_t["semanas_con_plantulas"], rp)})
-    est = pd.DataFrame(est)
     if not est.empty:
         u = est.iloc[-1]
         st.markdown(
@@ -460,6 +496,7 @@ def _tabla_resultados() -> dict[str, pd.DataFrame]:
         ("Próximo flush por lluvia (mediana)", _fecha(proximos.sort_values("fecha_mediana_flush").iloc[0]["fecha_mediana_flush"])
          if not proximos.empty else ""),
         ("Emergencia simulada a la fecha (% de la campaña)", round(100 * float(fc["F_emitido"].iloc[-1]), 1)),
+        ("Ventana de siembra: cuánto falta emerger", siembra.get("excel", "fuera de la ventana (1/05–31/08)")),
         ("Niveles", f"Atención desde {ATENCION:.0%}; Alerta desde {ALERTA:.0%}"),
         ("Clima", f"{_fecha(first)} – {_fecha(last)} ({'CSV propio' if upload is not None else 'SIGA–INTA Bordenave + ECMWF'})"),
         ("Parámetros del modelo de pulsos", str(params.source)),
