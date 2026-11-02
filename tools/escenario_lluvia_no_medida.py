@@ -15,6 +15,13 @@ import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def clima_2026():
+    """Clima 2026: la copia fija de data/campanias/2026 (desde el 1/1/2027) o meteo_daily.csv mientras dure la campaña."""
+    copia = ROOT / "data/campanias/2026/clima_bordenave_2026.csv"
+    return copia if copia.exists() else ROOT / "meteo_daily.csv"
+
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tools"))
 import avefa_pulsos as ap  # noqa: E402
@@ -25,7 +32,7 @@ FECHAS = pd.to_datetime(["2026-02-24", "2026-02-28", "2026-03-02", "2026-03-04",
 MONTOS = [5, 10, 20, 30, 50, 75]
 
 counts, total = load_counts()
-base = ap.clean_meteo(pd.read_csv(ROOT / "meteo_daily.csv"))
+base = ap.clean_meteo(pd.read_csv(clima_2026()))
 params = ap.Params.load(ROOT / "pulsos_params.json")
 obs = float(counts.loc[counts["Fecha"] == FLUSH_FIN, "dF_obs"].iloc[0])
 

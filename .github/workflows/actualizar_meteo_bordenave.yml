@@ -41,8 +41,7 @@ jobs:
       - name: Actualizar SIGA, puente provisional y ECMWF ENS
         env:
           # Bordenave / INTA
-          CAMPANIA_START: "2026-01-01"
-          CAMPANIA_END: "2026-12-31"
+          # Campaña: 1/1–31/12 del año en curso (automática; CAMPANIA_START / CAMPANIA_END la fijan).
           LATITUD: "-37.85"
           LONGITUD: "-63.02"
 
@@ -67,7 +66,7 @@ jobs:
 
           import numpy as np
           import pandas as pd
-          from actualizar_meteo_bordenave import CAMPANIA_END, hoy_argentina
+          from actualizar_meteo_bordenave import CAMPANIA_END, CAMPANIA_START, DIAS_TOLERANCIA_INICIO, hoy_argentina
 
           archivo = Path("meteo_daily.csv")
           estado_path = Path("data/estado_actualizacion_meteo.json")
@@ -120,7 +119,7 @@ jobs:
           observado = df["TipoDato"].astype(str).eq("Observado")
           provisional = df["TipoDato"].astype(str).eq("Provisional")
           pron = df["TipoDato"].astype(str).eq("Pronostico")
-          if not observado.any():
+          if not observado.any() and (hoy_argentina() - CAMPANIA_START).days > DIAS_TOLERANCIA_INICIO:
               raise SystemExit("No hay observaciones SIGA.")
           if (df["Fecha"].dt.date > CAMPANIA_END).any():
               raise SystemExit(f"Hay fechas posteriores al fin de campaña ({CAMPANIA_END}).")
