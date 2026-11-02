@@ -76,3 +76,19 @@ Límites: predice proporciones de la campaña (no pl/m²); un sitio, suelo sin l
 ### Validación 2026
 
 `python tools/validar_2026.py` compara el modelo con los conteos de 2026 sin remoción (`data/emergencia_2026_SR.csv`) usando el clima de la app (`meteo_daily.csv` mientras dure la campaña 2026; desde el 1/1/2027, la copia `data/campanias/2026/clima_bordenave_2026.csv`); `tools/figura_validacion_2026.py` genera `docs/validacion_2026.png`.
+
+## Apps siempre activas
+
+Streamlit Community Cloud suspende una app después de 12 horas sin visitas. El workflow
+[`mantener_activas.yml`](.github/workflows/mantener_activas.yml) abre **AVEFA Pulsos** y **PREDWEEM v8.5** con Chromium
+cada cuatro horas (a los 17 minutos de las 00, 04, 08, 12, 16 y 20 UTC), también al modificarse y a mano desde
+**Actions → Mantener activas las apps Streamlit → Run workflow**. El script (`scripts/mantener_activas.py`):
+
+- pulsa el botón para despertar la app si está suspendida;
+- espera hasta cinco minutos a que la interfaz esté cargada de verdad (título y barra lateral, incluso dentro del iframe
+  de Streamlit); una respuesta HTTP 200 sola no cuenta;
+- falla si alguna app no carga o muestra una excepción, y GitHub lo avisa según la configuración de notificaciones.
+
+Con seis visitas por día queda margen aunque GitHub demore las ejecuciones programadas. GitHub desactiva los workflows
+programados después de 60 días sin actividad en el repositorio; aquí no ocurre porque la actualización del clima hace
+commits dos veces por día. Esto reduce el riesgo de suspensión, pero no garantiza disponibilidad continua.

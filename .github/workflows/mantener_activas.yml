@@ -1,0 +1,38 @@
+name: Mantener activas las apps Streamlit
+
+on:
+  schedule:
+    # Cada cuatro horas, fuera del inicio de la hora (UTC). Streamlit suspende una app tras 12 horas sin visitas y
+    # GitHub puede demorar las ejecuciones programadas varias horas: con seis visitas por día queda margen.
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/mantener_activas.yml
+      - scripts/mantener_activas.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mantener-activas-avefa
+  cancel-in-progress: false
+
+jobs:
+  visitar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar navegador
+        run: |
+          python -m pip install "playwright==1.63.0"
+          python -m playwright install --with-deps chromium
+      - name: Abrir y verificar AVEFA Pulsos y PREDWEEM v8.5
+        run: python scripts/mantener_activas.py
