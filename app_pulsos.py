@@ -335,7 +335,7 @@ else:
 st.subheader("Campaña: probabilidad de flush, conteos y lluvia")
 camp = days[(days["Fecha"] >= pd.Timestamp(season_year, 2, 1)) & (days["Fecha"] <= emit)]
 cc = counts[(counts["Fecha"] >= pd.Timestamp(season_year, 1, 1)) & (counts["Fecha"] <= emit)]
-fig = make_subplots(rows=3, cols=1, shared_xaxes=True, row_heights=[0.5, 0.27, 0.23], vertical_spacing=0.05)
+fig = make_subplots(rows=4, cols=1, shared_xaxes=True, row_heights=[0.44, 0.09, 0.26, 0.21], vertical_spacing=0.04)
 fig.add_trace(go.Scatter(x=fc["Fecha"], y=100 * fc["prob_pulsos"], name="Solo pulsos (diaria)",
                          line=dict(color=COLORS["modelo"], width=2)), row=1, col=1)
 if not hist.empty:
@@ -350,7 +350,7 @@ fig.add_hline(y=100 * ATENCION, line_dash="dot", line_color=COLORS["atencion"], 
 fig.add_hline(y=100 * ALERTA, line_dash="dash", line_color=COLORS["alerta"], row=1, col=1,
               annotation_text=f"Alerta ≥ {ALERTA:.0%}", annotation_position="top left")
 fig.add_trace(go.Bar(x=cc["Fecha"], y=cc["media"], name="Conteo (plántulas por marco)",
-                     marker_color=COLORS["conteo"]), row=2, col=1)
+                     marker_color=COLORS["conteo"]), row=3, col=1)
 if not hist.empty:
     rec = pd.DataFrame({"Fecha": hist["Fecha"] + pd.to_timedelta([intervalo_muestreo(v) for v in hist["prob"]], unit="D"),
                         "desde": hist["Fecha"], "semanal": hist["prob"] >= ALERTA})
@@ -360,18 +360,44 @@ if not hist.empty:
                                  marker=dict(symbol="triangle-up", size=11, color=COLORS["conteo"], line=dict(color="white", width=1)),
                                  customdata=np.c_[rec["desde"].dt.strftime("%d/%m"), np.where(rec["semanal"], "1 semana (Alerta)", "2 semanas")],
                                  hovertemplate="Conteo recomendado %{x|%d/%m}<br>a %{customdata[1]} del conteo del %{customdata[0]}<extra></extra>"),
-                      row=2, col=1)
+                      row=3, col=1)
 if prox_conteo is not None:
     fig.add_vline(x=prox_conteo, line_dash="dot", line_color=COLORS["conteo"], line_width=1.5)
     fig.add_annotation(x=prox_conteo, y=1, yref="paper", text=f"próximo conteo {prox_conteo:%d/%m}", showarrow=False,
                        xanchor="left", yanchor="bottom", font=dict(size=11, color=COLORS["conteo"]))
-fig.add_trace(go.Bar(x=camp["Fecha"], y=camp["Prec"], name="Lluvia (mm)", marker_color=COLORS["lluvia"]), row=3, col=1)
+fig.add_trace(go.Bar(x=camp["Fecha"], y=camp["Prec"], name="Lluvia (mm)", marker_color=COLORS["lluvia"]), row=4, col=1)
+# semáforo semanal: una celda por semana con el nivel de la alerta emitida ese día (pulsos + conteos si hay un conteo de
+# las dos semanas previas; si no, solo pulsos, en tono más claro) y, con borde punteado, la de los próximos 7 días
+_hx, _hy, _ht = [], [], []
+_pf = fc.set_index("Fecha")["dF_7d"]
+for f0 in pd.date_range(pd.Timestamp(season_year, 2, 2), emit, freq="7D"):
+    f1 = min(f0 + pd.Timedelta(days=7), emit)
+    if f1 <= f0 or f0 not in _pf.index:
+        continue
+    s0 = ap.counts_signal(counts, f0) if not counts.empty else None
+    con_c = s0 is not None and s0["dias_desde"] <= 14
+    p0 = alert.probability(float(_pf[f0]), s0["g1"] if con_c else None, bool(con_c and s0["primer"]))
+    fig.add_shape(type="rect", x0=f0, x1=f1, y0=0.1, y1=0.9, fillcolor=COLORS[level(p0)], opacity=1.0 if con_c else 0.5,
+                  line=dict(color="white", width=1), row=2, col=1)
+    _hx.append(f0 + (f1 - f0) / 2); _hy.append(0.5)
+    _ht.append(f"Semana {f0:%d/%m}–{f1 - pd.Timedelta(days=1):%d/%m}: {LEVEL_NAME[level(p0)]} ({p0:.0%}) · "
+               + ("pulsos + conteos" if con_c else "solo pulsos (sin conteo reciente)"))
+fig.add_shape(type="rect", x0=emit, x1=emit + pd.Timedelta(days=7), y0=0.1, y1=0.9, fillcolor=COLORS[nivel], opacity=0.55,
+              line=dict(color="#111827", width=2, dash="dot"), row=2, col=1)
+_hx.append(emit + pd.Timedelta(days=3.5)); _hy.append(0.5)
+_ht.append(f"Próximos 7 días ({emit:%d/%m}–{emit + pd.Timedelta(days=6):%d/%m}): {LEVEL_NAME[nivel]} ({prob:.0%})")
+fig.add_trace(go.Scatter(x=_hx, y=_hy, mode="markers", marker=dict(size=16, opacity=0), text=_ht, showlegend=False,
+                         name="Semáforo", hovertemplate="%{text}<extra></extra>"), row=2, col=1)
+fig.update_yaxes(range=[0, 1], tickvals=[0.5], ticktext=["Semáforo"], showgrid=False, zeroline=False, fixedrange=True, row=2, col=1)
 fig.update_yaxes(title_text="Prob. flush (%)", range=[0, 100], row=1, col=1)
-fig.update_yaxes(title_text="Plántulas", rangemode="tozero", row=2, col=1)
-fig.update_yaxes(title_text="Lluvia (mm)", rangemode="tozero", row=3, col=1)
-fig.update_layout(height=560, hovermode="x unified", margin=dict(t=20, b=10, l=10, r=10),
+fig.update_yaxes(title_text="Plántulas", rangemode="tozero", row=3, col=1)
+fig.update_yaxes(title_text="Lluvia (mm)", rangemode="tozero", row=4, col=1)
+fig.update_layout(height=640, hovermode="x unified", margin=dict(t=20, b=10, l=10, r=10),
                   legend=dict(orientation="h", y=1.06), bargap=0.15)
 st.plotly_chart(fig, width="stretch")
+st.caption("Semáforo: una celda por semana con el nivel de la alerta de ese día (verde, naranja, rojo); en tono claro, las "
+           "semanas sin un conteo de las dos semanas previas (solo modelo de pulsos). La celda con borde punteado son los "
+           "próximos 7 días desde la fecha de emisión.")
 
 left, right = st.columns([3, 2])
 with left:
