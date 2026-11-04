@@ -1,5 +1,5 @@
 {
-  "ejecucion_utc": "2026-11-04T18:11:48+00:00",
+  "ejecucion_utc": "2026-11-04T23:53:42+00:00",
   "sitio": "Bordenave / INTA",
   "latitud": -37.85,
   "longitud": -63.02,
@@ -23,6 +23,6 @@
   "estadistico_operativo": "P50",
   "inicio_pronostico": "2026-11-04",
   "fin_pronostico": "2026-11-10",
-  "miembros_validos_min": 51,
+  "miembros_validos_min": 50,
   "huecos_finales": []
 }
