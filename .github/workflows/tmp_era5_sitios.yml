@@ -17,29 +17,37 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install requests pandas
-      - name: Descargar ERA5 diario 1991-2025
+      - name: Descargar ERA5 diario 1991-2026
         continue-on-error: true
         run: |
           mkdir -p era5
           python - <<'PY' 2>&1 | tee era5/log_sitios.txt
-          import time, requests, pandas as pd
+          import os, time, requests, pandas as pd
           sitios = {"Bordenave": (-37.85, -63.02), "Lartigau": (-38.6166, -61.70), "Tres Arroyos": (-38.45, -60.2763),
                     "Azul": (-36.87, -59.89), "Olavarria": (-36.8799, -60.2160), "Balcarce": (-37.7664, -58.2999),
                     "Pergamino": (-33.9443, -60.5745), "San Pedro": (-33.7328, -59.7965)}
-          out = []
-          for s, (lat, lon) in sitios.items():
-              for y0 in range(1991, 2026, 5):
-                  p = dict(latitude=lat, longitude=lon, start_date=f"{y0}-01-01", end_date=f"{min(y0 + 4, 2025)}-12-31", models="era5",
-                           daily="temperature_2m_max,temperature_2m_min", timezone="America/Argentina/Buenos_Aires")
-                  for intento in range(5):
-                      r = requests.get("https://archive-api.open-meteo.com/v1/archive", params=p, timeout=120)
-                      if r.status_code == 200: break
-                      print("reintento", s, y0, r.status_code, flush=True); time.sleep(30 * (intento + 1))
-                  else:
-                      continue
-                  d = pd.DataFrame(r.json()["daily"]); d["sitio"] = s
-                  out.append(d); print("ok", s, y0, len(d), flush=True); time.sleep(3)
-              pd.concat(out).to_csv("era5/era5_sitios_1991_2025.csv", index=False)
+          f = "era5/era5_sitios.csv"
+          prev = pd.read_csv(f) if os.path.exists(f) else pd.DataFrame(columns=["time", "sitio"])
+          hechos = set(zip(prev["sitio"], prev["time"].astype(str).str[:4]))
+          out = [prev]; t0 = time.time()
+          for y in range(1991, 2027):
+              for s, (lat, lon) in sitios.items():
+                  if (s, str(y)) in hechos or time.time() - t0 > 2400: continue
+                  p = dict(latitude=lat, longitude=lon, start_date=f"{y}-01-01", end_date=(f"{y}-12-31" if y < 2026 else "2026-10-28"),
+                           models="era5", daily="temperature_2m_max,temperature_2m_min", timezone="America/Argentina/Buenos_Aires")
+                  d = None
+                  for intento in range(4):
+                      try:
+                          r = requests.get("https://archive-api.open-meteo.com/v1/archive", params=p, timeout=60)
+                          if r.status_code == 200: d = pd.DataFrame(r.json()["daily"]); break
+                          print("estado", s, y, r.status_code, flush=True)
+                      except Exception as e:
+                          print("error", s, y, type(e).__name__, flush=True)
+                      time.sleep(20 * (intento + 1))
+                  if d is None: continue
+                  d["sitio"] = s; out.append(d); print("ok", s, y, len(d), flush=True)
+                  pd.concat(out).to_csv(f, index=False); time.sleep(1)
+          print("total", sum(len(x) for x in out), flush=True)
           PY
       - name: Guardar
         if: always()
