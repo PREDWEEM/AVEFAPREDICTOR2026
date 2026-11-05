@@ -19,6 +19,7 @@ jobs:
           github-token: ${{ github.token }}
           path: bajado
       - run: |
+          python3 -m pip install -q pandas
           mkdir -p era5 && python3 - <<'PY'
           import glob, pandas as pd
           d = pd.concat([pd.read_csv(f) for f in glob.glob("bajado/*/era5_*.csv")]).drop_duplicates(["sitio", "time"])
