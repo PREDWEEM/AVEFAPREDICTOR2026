@@ -130,13 +130,27 @@ with st.sidebar:
     with st.expander("🌧️ Lluvias del lote (pluviómetro)", expanded=bool(st.session_state.get("lluvias_lote") is not None)):
         st.caption("Si en el lote llovió distinto que en la estación, cargá lo que marcó el pluviómetro: en esos días "
                    "reemplaza la lluvia de la estación (0 mm también reemplaza). El resto de los días sigue con la "
-                   "estación. No se guarda en el repositorio: usá el botón para guardar el CSV.")
-        up_ll = st.file_uploader("Subir lluvias del lote (CSV: Fecha, mm)", type=["csv"], key="up_lluvias")
+                   "estación. No se guarda en el repositorio: usá los botones para guardarlas (Excel o CSV).")
+        up_ll = st.file_uploader("Subir lluvias del lote (Excel o CSV)", type=["xlsx", "xls", "xlsm", "csv"], key="up_lluvias",
+                                 help="Una fila por día con lluvia y una columna con los mm. Se busca la fila con el "
+                                      "encabezado «Fecha»; títulos, totales y acumulados se ignoran.")
         if up_ll is not None:
+            hoja_ll = None
+            if up_ll.name.lower().endswith((".xlsx", ".xls", ".xlsm")):
+                hojas_ll = ap.excel_sheets(up_ll)
+                if len(hojas_ll) > 1:
+                    hoja_ll = st.selectbox("Hoja", hojas_ll, key="hoja_lluvias")
+                up_ll.seek(0)
             try:
-                st.session_state["lluvias_lote"] = ap.clean_lot_rain(pd.read_csv(up_ll))
+                leido_ll = ap.read_lot_rain_file(up_ll, hoja_ll)
+                cols_ll = [c for c in leido_ll.columns if c != "Fecha"]
+                pref = next((c for c in cols_ll if str(c).strip().lower() in ("mm", "lluvia", "lluvias", "prec", "pp",
+                                                                              "precipitacion", "precipitación")), cols_ll[0])
+                col_ll = (st.selectbox("Columna de lluvia (mm)", cols_ll, index=cols_ll.index(pref), key="col_lluvias")
+                          if len(cols_ll) > 1 else pref)
+                st.session_state["lluvias_lote"] = ap.clean_lot_rain(leido_ll[["Fecha", col_ll]].rename(columns={col_ll: "mm"}))
             except Exception as e:  # noqa: BLE001
-                st.error(f"No se pudo leer el CSV de lluvias: {e}")
+                st.error(f"No se pudo leer el archivo de lluvias: {e}")
         base_ll = st.session_state.get("lluvias_lote")
         base_ll = (pd.DataFrame({"Fecha": [None] * 3, "mm": [None] * 3}) if base_ll is None or base_ll.empty
                    else base_ll.copy())
@@ -156,6 +170,14 @@ with st.sidebar:
             st.download_button("📥 Guardar lluvias del lote (CSV)",
                                lluvias_lote.assign(Fecha=lluvias_lote["Fecha"].dt.strftime("%Y-%m-%d")).to_csv(index=False),
                                "lluvias_lote_avefa.csv")
+            try:
+                _xl_ll = io.BytesIO()
+                with pd.ExcelWriter(_xl_ll, engine="openpyxl") as _w:
+                    lluvias_lote.assign(Fecha=lluvias_lote["Fecha"].dt.date).to_excel(_w, sheet_name="Lluvias_del_lote", index=False)
+                st.download_button("📥 Guardar lluvias del lote (Excel)", _xl_ll.getvalue(), "lluvias_lote_avefa.xlsx",
+                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            except Exception:  # noqa: BLE001
+                pass
 
     st.header("Conteos de campo")
     st.caption("Plántulas por marco en cada fecha de conteo, contadas y retiradas semanalmente. "
