@@ -131,6 +131,42 @@ def clean_meteo(df: pd.DataFrame) -> pd.DataFrame:
     return out.reset_index()
 
 
+def clean_lot_rain(df: pd.DataFrame | None) -> pd.DataFrame:
+    """Lluvias del lote (pluviómetro): columnas Fecha y mm. Una fila por día; si se repite un día, vale la última."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["Fecha", "mm"])
+    d = df.copy()
+    d.columns = [str(c).strip() for c in d.columns]
+    fcol = next((c for c in d.columns if c.lower() in ("fecha", "date")), d.columns[0])
+    mcol = next((c for c in d.columns if c != fcol and c.lower() in ("mm", "lluvia", "prec", "lluvia (mm)")),
+                next((c for c in d.columns if c != fcol), None))
+    if mcol is None:
+        return pd.DataFrame(columns=["Fecha", "mm"])
+    out = pd.DataFrame({"Fecha": parse_dates(d[fcol]), "mm": pd.to_numeric(d[mcol], errors="coerce")})
+    out = out.dropna().sort_values("Fecha").drop_duplicates("Fecha", keep="last")
+    out = out[out["mm"] >= 0]
+    out["Fecha"] = out["Fecha"].dt.normalize()
+    return out.reset_index(drop=True)
+
+
+def apply_lot_rain(meteo: pd.DataFrame, lluvias: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Reemplaza la lluvia de la estación por la del lote en los días cargados (0 mm también reemplaza).
+
+    Devuelve el clima modificado y una tabla con Fecha, mm de la estación y mm del lote para los días usados.
+    Los días fuera del clima disponible se ignoran.
+    """
+    if lluvias is None or lluvias.empty:
+        return meteo, pd.DataFrame(columns=["Fecha", "Estacion_mm", "Lote_mm"])
+    m = meteo.copy()
+    idx = pd.Series(m.index, index=pd.DatetimeIndex(m["Fecha"]).normalize())
+    usadas = lluvias[lluvias["Fecha"].isin(idx.index)]
+    filas = idx.loc[usadas["Fecha"]].values
+    cambios = pd.DataFrame({"Fecha": usadas["Fecha"].values, "Estacion_mm": m.loc[filas, "Prec"].values,
+                            "Lote_mm": usadas["mm"].values})
+    m.loc[filas, "Prec"] = usadas["mm"].values
+    return m, cambios
+
+
 def climatological_temps(dates: pd.DatetimeIndex) -> pd.DataFrame:
     """Temperaturas climatológicas aproximadas de Bordenave, solo para completar
     ventanas de pronóstico que superan los datos disponibles."""
