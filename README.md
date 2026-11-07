@@ -52,6 +52,13 @@ campañas dejando una afuera.
 Del 1/05 al 31/08, una caja **Ventana de siembra** resume lo que importa para decidir la fecha de siembra: cuánto falta emerger (con el último conteo de las dos semanas previas, en plántulas por marco y con su rango; sin conteo reciente, la estimación de la simulación con clima, sin rango validado), el próximo flush esperado por lluvia y el nivel de la alerta; también va al Resumen del Excel. Con conteos, la app estima además qué parte de la campaña ya emergió y cuánto falta, con un rango del 80 % calibrado en 41 campañas (`remanente_params.json`; cobertura fuera de muestra 78 %). La app indica cuándo contar: cada semana mientras haya Alerta y cada dos semanas el resto (simulado en 41 campañas: AUC 0,794 contra 0,808 con conteo semanal fijo, con un tercio menos de conteos). Un conteo vale hasta 14 días; sin conteos recientes, la app usa solo el modelo de pulsos. Los conteos se cargan en la tabla de la barra
 lateral o desde un CSV (`Fecha, Marco 1, Marco 2, …`); no se guardan en el repositorio.
 
+**Lluvias del lote.** En la barra lateral (*Clima → Lluvias del lote*) se puede cargar lo que marcó el pluviómetro del
+lote (`Fecha, mm`, en la tabla o desde un CSV): en esos días reemplaza la lluvia de la estación (0 mm también reemplaza)
+y el resto sigue con la estación. Sirve cuando llueve distinto en el lote: en 2026 la estación no registró lluvia entre
+el 21/02 y el 14/03 y el 9–16/03 emergió el 21 % de la campaña; con las lluvias de MeteoBahía (28/02: 18 mm; 02/03:
+27 mm) la alerta del 9/03 pasa de 4 % (sin alerta) a 20 % (Atención). Los días usados se listan en la barra lateral y van
+al Excel (hoja `Lluvias_del_lote`); no se guardan en el repositorio.
+
 Modelo en uso (`pulsos_params.json` y `alerta_params.json`): ajustado con las 41 campañas disponibles (1977–2015 con
 NH0343 corregida —meses anómalos de 2001–2005 reemplazados por ERA5 + sesgo de la estación— y 2018, 2022 y 2026 con
 SIGA corregida; 1246 semanas), con mínimos cuadrados ponderados: cada campaña pesa 0,5^((2026 − año)/20), porque

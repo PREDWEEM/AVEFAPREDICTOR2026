@@ -127,6 +127,36 @@ with st.sidebar:
     emit = pd.Timestamp(st.date_input("Fecha de emisión", value=default_emit.date(),
                                       min_value=first.date(), max_value=last.date()))
 
+    with st.expander("🌧️ Lluvias del lote (pluviómetro)", expanded=bool(st.session_state.get("lluvias_lote") is not None)):
+        st.caption("Si en el lote llovió distinto que en la estación, cargá lo que marcó el pluviómetro: en esos días "
+                   "reemplaza la lluvia de la estación (0 mm también reemplaza). El resto de los días sigue con la "
+                   "estación. No se guarda en el repositorio: usá el botón para guardar el CSV.")
+        up_ll = st.file_uploader("Subir lluvias del lote (CSV: Fecha, mm)", type=["csv"], key="up_lluvias")
+        if up_ll is not None:
+            try:
+                st.session_state["lluvias_lote"] = ap.clean_lot_rain(pd.read_csv(up_ll))
+            except Exception as e:  # noqa: BLE001
+                st.error(f"No se pudo leer el CSV de lluvias: {e}")
+        base_ll = st.session_state.get("lluvias_lote")
+        base_ll = (pd.DataFrame({"Fecha": [None] * 3, "mm": [None] * 3}) if base_ll is None or base_ll.empty
+                   else base_ll.copy())
+        base_ll["Fecha"] = ap.parse_dates(base_ll["Fecha"]).dt.date
+        base_ll["mm"] = pd.to_numeric(base_ll["mm"], errors="coerce")
+        ed_ll = st.data_editor(base_ll, num_rows="dynamic", width="stretch", key="editor_lluvias",
+                               column_config={"Fecha": st.column_config.DateColumn("Fecha", format="DD/MM/YYYY"),
+                                              "mm": st.column_config.NumberColumn("mm", min_value=0.0, step=0.5)})
+        lluvias_lote = ap.clean_lot_rain(ed_ll)
+        meteo, cambios_lluvia = ap.apply_lot_rain(meteo, lluvias_lote)
+        if not lluvias_lote.empty:
+            fuera = len(lluvias_lote) - len(cambios_lluvia)
+            st.caption(f"Se usan {len(cambios_lluvia)} días del pluviómetro"
+                       + (f" ({fuera} fuera del clima disponible, ignorados)" if fuera else "") + ": "
+                       + ", ".join(f"{r.Fecha:%d/%m} {r.Lote_mm:g} mm (estación {r.Estacion_mm:g})"
+                                   for r in cambios_lluvia.itertuples()))
+            st.download_button("📥 Guardar lluvias del lote (CSV)",
+                               lluvias_lote.assign(Fecha=lluvias_lote["Fecha"].dt.strftime("%Y-%m-%d")).to_csv(index=False),
+                               "lluvias_lote_avefa.csv")
+
     st.header("Conteos de campo")
     st.caption("Plántulas por marco en cada fecha de conteo, contadas y retiradas semanalmente. "
                "Solo importa la proporción entre fechas, así que vale cualquier tamaño de marco.")
@@ -187,6 +217,8 @@ fc = fc[fc["Fecha"] <= emit].copy()
 st.title("🌧️ AVEFA Pulsos — alerta semanal de flushes de *Avena fatua*")
 st.caption("Combina el modelo de pulsos de lluvia (cada lluvia dispara emergencia con un rezago en tiempo térmico de suelo) "
            "con los conteos de campo, que indican si la campaña viene adelantada o atrasada.")
+if not cambios_lluvia.empty:
+    st.caption(f"🌧️ Con lluvias del lote en {len(cambios_lluvia)} días (cargadas en la barra lateral); el resto, estación.")
 
 if fc.empty:
     st.info(f"La campaña {season_year} empieza el 1 de febrero. Todavía no hay pronósticos para la fecha elegida.")
@@ -524,7 +556,8 @@ def _tabla_resultados() -> dict[str, pd.DataFrame]:
         ("Emergencia simulada a la fecha (% de la campaña)", round(100 * float(fc["F_emitido"].iloc[-1]), 1)),
         ("Ventana de siembra: cuánto falta emerger", siembra.get("excel", "fuera de la ventana (1/05–31/08)")),
         ("Niveles", f"Atención desde {ATENCION:.0%}; Alerta desde {ALERTA:.0%}"),
-        ("Clima", f"{_fecha(first)} – {_fecha(last)} ({'CSV propio' if upload is not None else 'SIGA–INTA Bordenave + ECMWF'})"),
+        ("Clima", f"{_fecha(first)} – {_fecha(last)} ({'CSV propio' if upload is not None else 'SIGA–INTA Bordenave + ECMWF'})"
+                  + (f"; lluvia del lote en {len(cambios_lluvia)} días" if not cambios_lluvia.empty else "")),
         ("Parámetros del modelo de pulsos", str(params.source)),
     ]
     diaria = fc.assign(prob_pulsos_pct=(100 * fc["prob_pulsos"]).round(1), dF_7d_pct=(100 * fc["dF_7d"]).round(2),
@@ -543,6 +576,8 @@ def _tabla_resultados() -> dict[str, pd.DataFrame]:
     tablas["Emergencia_acumulada"] = acum
     if not ev.empty:
         tablas["Lluvias_60_dias"] = ev[["Fecha", "Prec", "S_prev", "emergencia_esperada", "fecha_mediana_flush", "fecha_p90_flush"]]
+    if not cambios_lluvia.empty:
+        tablas["Lluvias_del_lote"] = cambios_lluvia
     tablas["Clima"] = meteo[meteo["Fecha"] <= emit + pd.Timedelta(days=7)]
     return tablas
 
