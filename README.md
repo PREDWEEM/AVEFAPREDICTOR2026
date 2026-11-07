@@ -53,7 +53,7 @@ Del 1/05 al 31/08, una caja **Ventana de siembra** resume lo que importa para de
 lateral o desde un CSV (`Fecha, Marco 1, Marco 2, …`); no se guardan en el repositorio.
 
 **Lluvias del lote.** En la barra lateral (*Clima → Lluvias del lote*) se puede cargar lo que marcó el pluviómetro del
-lote (`Fecha, mm`, en la tabla o desde un CSV): en esos días reemplaza la lluvia de la estación (0 mm también reemplaza)
+lote (`Fecha, mm`, en la tabla o desde un Excel o CSV en formato libre: se busca la fila «Fecha» y, si hay varias columnas, se elige la de lluvia): en esos días reemplaza la lluvia de la estación (0 mm también reemplaza)
 y el resto sigue con la estación. Sirve cuando llueve distinto en el lote: en 2026 la estación no registró lluvia entre
 el 21/02 y el 14/03 y el 9–16/03 emergió el 21 % de la campaña; con las lluvias de MeteoBahía (28/02: 18 mm; 02/03:
 27 mm) la alerta del 9/03 pasa de 4 % (sin alerta) a 20 % (Atención). Los días usados se listan en la barra lateral y van

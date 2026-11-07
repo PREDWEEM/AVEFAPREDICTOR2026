@@ -138,7 +138,8 @@ def clean_lot_rain(df: pd.DataFrame | None) -> pd.DataFrame:
     d = df.copy()
     d.columns = [str(c).strip() for c in d.columns]
     fcol = next((c for c in d.columns if c.lower() in ("fecha", "date")), d.columns[0])
-    mcol = next((c for c in d.columns if c != fcol and c.lower() in ("mm", "lluvia", "prec", "lluvia (mm)")),
+    nombres = ("mm", "lluvia", "lluvias", "prec", "pp", "precipitacion", "precipitación", "lluvia (mm)", "pp (mm)")
+    mcol = next((c for c in d.columns if c != fcol and c.lower() in nombres),
                 next((c for c in d.columns if c != fcol), None))
     if mcol is None:
         return pd.DataFrame(columns=["Fecha", "mm"])
@@ -589,6 +590,14 @@ def read_counts_file(file, sheet=None) -> pd.DataFrame:
     else:
         raw = pd.read_csv(file, header=None, sep=None, engine="python")
     return read_counts_table(raw)
+
+
+def read_lot_rain_file(file, sheet=None) -> pd.DataFrame:
+    """Lluvias del lote desde un CSV o Excel en formato libre: busca la fila «Fecha» y devuelve Fecha + columnas numéricas.
+
+    La columna de lluvia se elige después (``clean_lot_rain`` toma la llamada mm, lluvia, prec o pp, o la primera).
+    """
+    return read_counts_file(file, sheet)
 
 
 def excel_sheets(file) -> list[str]:
